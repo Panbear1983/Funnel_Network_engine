@@ -1,0 +1,208 @@
+Screen {
+    layout: vertical;
+}
+
+#body {
+    height: 1fr;
+}
+
+#sidebar {
+    width: 34;
+    border-right: solid $primary;
+    padding: 1;
+}
+
+.sidebar-title {
+    text-style: bold;
+    padding-bottom: 1;
+}
+
+#req-list {
+    height: 1fr;
+    border: round $panel;
+}
+
+.sidebar-actions {
+    height: auto;
+    padding-top: 1;
+}
+
+/* New / Delete split the row into two equal halves; only the first button
+   carries the gap so the pair stays symmetric. */
+.sidebar-actions Button {
+    width: 1fr;
+    content-align: center middle;
+}
+
+#new-req {
+    margin-right: 1;
+}
+
+.sidebar-manual {
+    width: 100%;
+    margin-top: 1;
+    content-align: center middle;
+}
+
+#main {
+    width: 1fr;
+    padding: 0 1;
+}
+
+#breadcrumb {
+    height: auto;
+    padding: 1;
+    background: $boost;
+}
+
+.placeholder {
+    padding: 2;
+    color: $text-muted;
+}
+
+.panel-title {
+    text-style: bold;
+    padding: 1 0;
+}
+
+/* CRUD / action toolbars */
+.toolbar {
+    height: auto;
+    padding: 1 0;
+}
+
+.toolbar Button {
+    margin-right: 1;
+    min-width: 12;            /* short-labelled buttons (Edit/Delete/Reject) stay a sane width */
+    content-align: center middle;
+}
+
+.toolbar Static {
+    width: auto;
+}
+
+DataTable {
+    height: 1fr;
+}
+
+/* Modal dialogs */
+ModalScreen {
+    align: center middle;
+}
+
+.dialog {
+    width: 72;
+    max-width: 90%;
+    height: auto;
+    max-height: 90%;
+    padding: 1 2;
+    border: thick $primary;
+    background: $surface;
+}
+
+.form-dialog {
+    width: 84;
+    max-width: 90%;
+}
+
+.dialog-title {
+    text-style: bold;
+    padding-bottom: 1;
+}
+
+.form-body {
+    height: auto;
+    max-height: 26;
+}
+
+.form-actions {
+    height: auto;
+    padding-top: 1;
+    align-horizontal: right;
+}
+
+.form-actions Button {
+    margin-left: 1;
+    min-width: 12;
+}
+
+.field-label {
+    padding-top: 1;
+    color: $text-muted;
+}
+
+#intake-form {
+    height: 1fr;
+}
+
+#intake-hint {
+    padding: 0 0 1 0;
+    color: $text-muted;
+}
+
+.multi-select {
+    height: auto;
+    max-height: 12;
+    border: round $panel;
+}
+
+.research-log {
+    height: 10;
+    border: round $panel;
+    margin: 1 0;
+}
+
+/* Map (flow) tab */
+.flow-hint {
+    color: $text-muted;
+    padding: 0 0 1 0;
+}
+
+#flow-topic {
+    width: 1fr;
+    margin-right: 1;
+}
+
+#flow-depth {
+    width: 26;
+}
+
+#flow-keys {
+    height: auto;
+    padding: 0 0 1 0;
+}
+
+#flow-result {
+    width: 1fr;
+    height: auto;
+    padding: 1 0 0 1;
+    color: $text-muted;
+}
+
+.empty-hint {
+    color: $text-muted;
+    padding: 0 0 1 0;
+}
+
+.detail-block {
+    background: $boost;
+    padding: 1;
+    margin-bottom: 1;
+}
+
+/* Nested sub-tabs (Graph & Evidence, Analysis & Export) fill their pane */
+#graph-subtabs, #analysis-subtabs {
+    height: 1fr;
+}
+
+/* User-manual modal */
+.manual-dialog {
+    width: 90%;
+    max-width: 140;
+    height: 90%;
+}
+
+#manual-viewer {
+    height: 1fr;
+    margin-top: 1;
+}

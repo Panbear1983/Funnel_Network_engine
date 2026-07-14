@@ -1,0 +1,34 @@
+[project]
+name = "funnel-network-engine"
+version = "0.1.0"
+description = "Industry-agnostic value-chain research and visualization engine with a terminal UI"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "textual>=1.0",
+    "sqlmodel>=0.0.21",
+]
+
+[project.optional-dependencies]
+# Scoring / chart export (Phases 4-5).
+viz = [
+    "networkx>=3.0",
+    "matplotlib>=3.8",
+]
+# Web-research automation (Phase 6).
+research = [
+    "anthropic>=0.90",
+    "httpx>=0.27",
+    "trafilatura>=1.8",
+    "python-dotenv>=1.0",
+]
+
+[project.scripts]
+funnel = "funnel.__main__:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["funnel"]

@@ -1,0 +1,82 @@
+"""OpenRouter client (OpenAI-compatible chat completions) — the alternative
+LLM provider to the native Anthropic client, useful for cheap models like
+DeepSeek. httpx is imported lazily so the TUI starts without the research
+extra. Select it with FUNNEL_LLM_PROVIDER=openrouter in .env."""
+
+from __future__ import annotations
+
+from typing import Callable
+
+from funnel import config
+from funnel.research.claude import _parse_json
+
+_ENDPOINT = "https://openrouter.ai/api/v1/chat/completions"
+_HEADERS_META = {
+    "HTTP-Referer": "https://github.com/Panbear1983/Funnel_Network_engine",
+    "X-Title": "Funnel Network Engine",
+}
+
+
+class OpenRouterError(Exception):
+    pass
+
+
+def chat_json(
+    messages: list[dict],
+    model: str,
+    *,
+    api_key: str | None = None,
+    online: bool = False,
+    temperature: float = 0.2,
+    timeout: float = 180.0,
+    max_retries: int = 2,
+) -> dict:
+    """One chat-completions call, parsed as JSON. online=True appends
+    OpenRouter's `:online` web plugin (extra per-result fee applies)."""
+    import httpx
+
+    key = api_key or config.openrouter_api_key()
+    if not key:
+        raise OpenRouterError("OPENROUTER_API_KEY is not set (add it to .env).")
+
+    payload = {
+        "model": f"{model}:online" if online and ":" not in model else model,
+        "messages": messages,
+        "temperature": temperature,
+        "response_format": {"type": "json_object"},
+    }
+    headers = {"Authorization": f"Bearer {key}", **_HEADERS_META}
+
+    last_error: Exception | None = None
+    for _ in range(max_retries + 1):
+        try:
+            response = httpx.post(_ENDPOINT, json=payload, headers=headers, timeout=timeout)
+            if response.status_code == 429:
+                last_error = OpenRouterError("OpenRouter rate-limited (429).")
+                continue
+            response.raise_for_status()
+            data = response.json()
+            break
+        except httpx.HTTPError as exc:
+            last_error = exc
+    else:
+        raise OpenRouterError(f"OpenRouter request failed: {last_error}") from last_error
+
+    choices = data.get("choices") or []
+    if not choices:
+        raise OpenRouterError(f"OpenRouter returned no choices: {str(data)[:200]}")
+    content = (choices[0].get("message") or {}).get("content") or ""
+    try:
+        return _parse_json(content)
+    except Exception as exc:
+        raise OpenRouterError(f"Non-JSON output from {model}: {content[:200]!r}") from exc
+
+
+def make_llm(model: str, *, api_key: str | None = None) -> Callable[..., dict]:
+    """Bind a model into the `llm(messages, online=False) -> dict` callable
+    shape the pipeline expects."""
+
+    def llm(messages: list[dict], *, online: bool = False) -> dict:
+        return chat_json(messages, model, api_key=api_key, online=online)
+
+    return llm
