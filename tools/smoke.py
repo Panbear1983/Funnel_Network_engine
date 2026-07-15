@@ -14,6 +14,8 @@ os.environ.setdefault("FUNNEL_HOME", tempfile.mkdtemp(prefix="funnel_smoke_"))
 # Provider pinned so a repo .env (FUNNEL_LLM_PROVIDER=openrouter) can't flip the preflight.
 os.environ.setdefault("ANTHROPIC_API_KEY", "smoke-test-dummy")
 os.environ["FUNNEL_LLM_PROVIDER"] = "anthropic"
+# The dummy key would otherwise make enrichment attempt a real API call.
+os.environ["FUNNEL_SKIP_ENRICH"] = "1"
 
 from funnel.db import repo  # noqa: E402
 from funnel.ui.app import FunnelApp  # noqa: E402

@@ -22,12 +22,22 @@ def _company_name(m, cid: str) -> str:
     return c.name if c else (cid or "?")
 
 
+def _fmt_cap(c) -> str:
+    cap = (c.financials or {}).get("market_cap")
+    if not cap:
+        return "—"
+    for unit, div in (("T", 1e12), ("B", 1e9), ("M", 1e6)):
+        if cap >= div:
+            return f"{cap / div:.1f}{unit}"
+    return str(cap)
+
+
 def companies_by_relevance(m):
-    cols = ("Company", "Ticker", "Role", "Relevance", "Evidence")
+    cols = ("Company", "Ticker", "Role", "Relevance", "Mkt cap", "Evidence")
     ordered = sorted(m.companies, key=lambda c: m.relevance.get(c.id, 0.0), reverse=True)
     rows = [
         (c.name, c.ticker or "—", c.role, f"{m.relevance.get(c.id, 0.0):.2f}",
-         str(len(m.evidence_by_company.get(c.id, []))))
+         _fmt_cap(c), str(len(m.evidence_by_company.get(c.id, []))))
         for c in ordered
     ]
     return cols, rows

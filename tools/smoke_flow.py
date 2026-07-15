@@ -178,6 +178,33 @@ def run() -> None:
     print("MERGE_OK second run merged", result2["counts"]["merged"],
           "entities, zero duplicates")
 
+    # --- enrichment: fake fundamentals + fake estimates --------------------
+    from funnel.research import enrich as enrich_mod
+
+    def fake_fetch(ticker):
+        return {"market_cap": 5e9, "revenue": 1e9, "symbol": ticker}
+
+    def fake_est_llm(messages, *, online=False):
+        assert "revenue_purity" in messages[-1]["content"], "wrong prompt"
+        return {"estimates": [{"name": "La Marzocco", "revenue_purity": 0.9,
+                               "market_share": 0.4, "rationale": "focused maker"}]}
+
+    comps = repo.list_for_request(CompanyNode, request_id)
+    lm = next(c for c in comps if c.name == "La Marzocco")
+    ims = next(c for c in comps if c.name == "IMS Boilers")
+    lm.ticker = "LMZ.MI"                    # fundamentals candidate
+    ims.revenue_purity_estimate = 0.55      # pre-set manual value must survive
+    repo.update(lm)
+    repo.update(ims)
+    counts_e = enrich_mod.enrich_companies(request_id, llm=fake_est_llm, fetch=fake_fetch)
+    lm2 = repo.get(CompanyNode, lm.id)
+    ims2 = repo.get(CompanyNode, ims.id)
+    assert lm2.financials.get("market_cap") == 5e9, lm2.financials
+    assert lm2.revenue_purity_estimate == 0.9 and lm2.market_share_estimate == 0.4
+    assert ims2.revenue_purity_estimate == 0.55, ims2.revenue_purity_estimate
+    assert counts_e == {"financials": 1, "estimates": 1}, counts_e
+    print("ENRICH_OK fundamentals + estimates landed; manual value preserved")
+
     # re-run on the same request must NOT clobber existing intake answers
     flow.apply_brief(request_id, lambda m, **k: {"industry": "SHOULD NOT OVERWRITE"})
     assert repo.get_intake_answers(request_id)["industry"].answer_value == "Espresso machines"

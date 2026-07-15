@@ -86,6 +86,18 @@ def company_discovery(node_name: str, brief: str, context: str, limit: int) -> l
     )
 
 
+def company_estimates(company_lines: str) -> list[dict]:
+    return _msg(
+        f"Companies (name — role):\n{company_lines}\n\n"
+        "For each company, estimate what fraction of its revenue comes from the "
+        "role listed (revenue_purity) and its approximate market share within "
+        "that role (market_share). Use your best judgement; omit a field rather "
+        "than guess wildly.\n"
+        'JSON shape: {"estimates":[{"name":str,"revenue_purity":0..1|null,'
+        '"market_share":0..1|null,"rationale":str}]}'
+    )
+
+
 def relationships(company_lines: str, brief: str) -> list[dict]:
     return _msg(
         f"{brief}\n\nCompanies (name — role):\n{company_lines}\n\n"

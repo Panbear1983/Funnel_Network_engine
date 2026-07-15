@@ -22,6 +22,10 @@ research = [
     "trafilatura>=1.8",
     "python-dotenv>=1.0",
 ]
+# Company-intelligence enrichment (fundamentals via yfinance).
+intel = [
+    "yfinance>=0.2",
+]
 
 [project.scripts]
 funnel = "funnel.__main__:main"

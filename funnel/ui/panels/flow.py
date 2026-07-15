@@ -353,7 +353,7 @@ class FlowPanel(Vertical):
         self._render_proposals()
         counts = result["counts"]
         merged = counts.get("merged", 0)
-        new_total = sum(v for k, v in counts.items() if k != "merged")
+        new_total = sum(v for k, v in counts.items() if k not in ("merged", "enriched"))
         charts = result["charts"]
         self.query_one("#flow-result", Static).update(
             f"[b]{new_total}[/b] new" + (f" · [b]{merged}[/b] merged" if merged else "")

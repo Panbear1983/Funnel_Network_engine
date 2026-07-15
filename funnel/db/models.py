@@ -75,6 +75,8 @@ class CompanyNode(SQLModel, table=True):
     market_share_estimate: Optional[float] = None
     customer_concentration: Optional[str] = None
     confidence_score: float = 0.0
+    # Fetched fundamentals (market_cap, revenue, gross_margin, …) — Phase C.
+    financials: dict = Field(default_factory=dict, sa_type=JSON)
 
 
 class RelationshipEdge(SQLModel, table=True):

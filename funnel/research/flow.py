@@ -18,6 +18,7 @@ from funnel.export import data_export
 from funnel.export.chart_tree import render_tree
 from funnel.graph.assembly import build_graph
 from funnel.intake.questions import SECTIONS
+from funnel.research import enrich
 from funnel.research import llm as llm_factory
 from funnel.research import prompts
 from funnel.research.ingest import commit_proposals
@@ -111,12 +112,25 @@ def run_research(
 
 
 def finalize(request_id: str, run_id: str,
-             progress: Optional[Progress] = None) -> dict:
-    """Commit non-rejected proposals, then export the tree chart at all three
-    detail levels plus the Markdown report. Returns counts and file paths."""
+             progress: Optional[Progress] = None, llm=None) -> dict:
+    """Commit non-rejected proposals, enrich companies, then export the tree
+    chart at all three detail levels plus the Markdown report."""
     counts = commit_proposals(request_id, run_id=run_id)
     if progress:
         progress("Committed " + ", ".join(f"{k} {v}" for k, v in counts.items()) + ".")
+
+    # Company intelligence: fundamentals + purity/share estimates, so the
+    # relevance scoring under the charts reflects real metrics. Graceful
+    # no-op without yfinance/keys; FUNNEL_SKIP_ENRICH=1 disables.
+    if llm is None:
+        run = repo.get(ResearchRun, run_id)
+        if run and run.model:
+            llm = llm_factory.make_llm(run.model)
+    if progress:
+        progress("Enriching companies…")
+    counts["enriched"] = sum(
+        enrich.enrich_companies(request_id, llm=llm, progress=progress).values())
+
     model = build_graph(request_id)
     request = model.request
 
