@@ -83,12 +83,15 @@ The screen has three regions:
 
 ## 4. The Map Flow (golden path)
 
-### Step 1 — Type a topic and press Generate
+### Step 1 — Type a topic and press Enter
 
 Open the **Map** tab (the default), type your topic — e.g. *"Chip
-manufacturing"* — pick a depth, and press **Generate** (or just hit Enter).
-There is no separate "create request" step: the topic bar creates and selects
-the request for you.
+manufacturing"* — pick a depth, and hit Enter. There is no separate "create
+request" step: the topic bar creates and selects the request for you. With
+**auto-build** on (the default), that's the entire input: research runs,
+obvious junk is auto-rejected, everything else commits, and the tree charts
+export and open by themselves. Re-running the same topic merges — nothing
+duplicates. Flip auto-build off to review proposals before they commit.
 
 Generate runs everything automatically, with live progress in the log:
 
@@ -99,12 +102,14 @@ Generate runs everything automatically, with live progress in the log:
 3. **Smart search** (section 7) — topic-aware, intent-tagged web queries per node.
 4. **Company discovery, relationships, evidence** — staged as proposals.
 
-### Step 2 — Review
+### Step 2 — Review (optional)
 
-Every finding appears as a row. All rows are **included by default**:
+Every finding appears as a row, doubtful ones (auto-rejected junk,
+low-confidence) sorted to the top. All rows are **included by default**:
 
 - **Click or Enter** on a row toggles it rejected (✗) / included (✓).
-- **v** opens the full detail (payload, rationale, sources).
+- **v** opens the full detail (payload, rationale — including why something
+  was auto-rejected — and sources).
 - **a** restores all rejected rows.
 
 ### Step 3 — Press Build
@@ -174,9 +179,26 @@ node **tagged by source intent**:
 
 The gatherer also de-duplicates URLs across nodes (the same page is never
 scraped twice in one run) and, when a node's scrape comes back thin, retries
-once using the topic's first alias before falling back to Claude's server-side
-web search. If planning fails entirely, built-in query templates take over — a
+once using the topic's first alias before falling back to the model's own web
+search. If planning fails entirely, built-in query templates take over — a
 run never dies because of planning.
+
+Further quality passes, all bounded and deterministic in count:
+
+- **Per-edge evidence hunting** — confirmed relationships that no evidence
+  covers each get one targeted search, so strong claims carry sources.
+- **Recency bias** — searches are pinned to the current year unless the
+  intake's "allow older sources" answer says otherwise; old evidence also
+  weighs lighter in scoring (recency decay).
+- **Domain credibility** — evidence from regulators/filings hosts outranks
+  wire services, which outrank trade press, PR wires, and forums.
+- **Company enrichment** — after commit, market cap/revenue/margin are
+  fetched for tickered companies (optional `intel` extra: yfinance) and
+  revenue-purity / market-share estimates fill in where missing, sharpening
+  the investment-relevance ranking.
+- **Contradiction check (Deep tier)** — claimed relationships are tested
+  against the collected evidence; contradicted edges are downgraded to
+  "weak" and listed in the Markdown report.
 
 ---
 

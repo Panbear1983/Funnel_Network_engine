@@ -58,6 +58,10 @@ def fake_llm(messages, *, online=False):
                  "role": "supplier", "confidence": 0.9, "sources": []}]}
         return {"companies": [{"name": "La Marzocco", "ticker": None, "country": "IT",
                                "role": "operator", "confidence": 0.9, "sources": []}]}
+    if "CONTRADICTS" in t:
+        return {"contradictions": [{"from": "IMS Boilers", "to": "La Marzocco",
+                                    "issue": "2026 filing says the contract ended",
+                                    "source_url": "http://c"}]}
     if "Infer supplier" in t:
         return {"edges": [{"from": "IMS Boilers", "to": "La Marzocco",
                            "relationship_type": "supplier", "evidence_level": "confirmed",
@@ -204,6 +208,42 @@ def run() -> None:
     assert ims2.revenue_purity_estimate == 0.55, ims2.revenue_purity_estimate
     assert counts_e == {"financials": 1, "estimates": 1}, counts_e
     print("ENRICH_OK fundamentals + estimates landed; manual value preserved")
+
+    # --- source trust: domain tiers + recency decay ------------------------
+    from funnel.scoring.scorer import recency_factor
+    from funnel.sources import domain_quality, evidence_quality, source_type_quality
+
+    assert domain_quality("https://www.sec.gov/filing/x") == 1.0
+    assert domain_quality("https://reuters.com/article") == 0.9
+    assert domain_quality("https://old.reddit.com/r/espresso") == 0.2
+    assert domain_quality("https://some-random-blog.example/post") is None
+    assert domain_quality("") is None
+
+    class _Ev:
+        source_type = "news"
+        source_url = "https://reuters.com/a"
+        date = "2024-05-01"
+    assert evidence_quality(_Ev()) > source_type_quality("news")  # domain lifts news
+    assert recency_factor("2026-01", now_year=2026) == 1.0
+    assert recency_factor("2024", now_year=2026) == 0.9
+    assert recency_factor("2018-03-04", now_year=2026) == 0.6
+    assert recency_factor("no date here") == 1.0
+    assert recency_factor("2001", allow_old=True) == 1.0
+    print("TRUST_OK domain tiers + recency decay behave")
+
+    # --- deep tier: contradiction pass downgrades the conflicted edge ------
+    rid2 = repo.create_request("Espresso Deep").id
+    run_d = flow.run_research(rid2, "deep_research", llm=fake_llm,
+                              gather=fake_gather, online_fallback=False)
+    assert run_d.status == "complete", run_d.summary
+    edge_props = [p for p in repo.list_proposals(rid2, run_id=run_d.id)
+                  if p.entity_type == "edge"]
+    assert edge_props and edge_props[0].payload["evidence_level"] == "weak", edge_props
+    assert "contradicted" in edge_props[0].rationale, edge_props[0].rationale
+    res_d = flow.finalize(rid2, run_d.id)
+    report_text = open(res_d["report"]).read()
+    assert "Contradictions" in report_text and "contract ended" in report_text, res_d["report"]
+    print("CONTRADICTION_OK deep-tier check downgraded the edge + report section written")
 
     # re-run on the same request must NOT clobber existing intake answers
     flow.apply_brief(request_id, lambda m, **k: {"industry": "SHOULD NOT OVERWRITE"})

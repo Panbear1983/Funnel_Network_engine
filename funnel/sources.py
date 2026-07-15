@@ -43,6 +43,52 @@ def source_type_quality(source_type: str) -> float:
     return round(1.0 - _rank(source_type) / len(SOURCE_TYPE_ORDER), 3)
 
 
+# --- URL-domain credibility (Phase D) --------------------------------------
+# Registered-domain suffix -> credibility. Small and opinionated: regulators/
+# filings > wire services & majors > trade press > vendor PR wires > forums.
+_DOMAIN_TIERS = {
+    1.0: ("sec.gov", "europa.eu", "sedarplus.ca", "edinet-fsa.go.jp"),
+    0.9: ("reuters.com", "bloomberg.com", "ft.com", "wsj.com", "apnews.com",
+          "nikkei.com", "economist.com"),
+    0.7: ("semi.org", "eetimes.com", "digitimes.com", "electronicsweekly.com",
+          "spglobal.com", "gartner.com", "idc.com", "trendforce.com"),
+    0.4: ("prnewswire.com", "businesswire.com", "globenewswire.com",
+          "accesswire.com"),
+    0.2: ("reddit.com", "quora.com", "medium.com", "substack.com",
+          "blogspot.com", "wordpress.com"),
+}
+
+
+def domain_quality(url: str) -> Optional[float]:
+    """Credibility of a source URL's domain; None when unknown (no signal)."""
+    if not url:
+        return None
+    from urllib.parse import urlparse
+    try:
+        host = (urlparse(url).netloc or "").lower().split(":")[0]
+    except ValueError:
+        return None
+    host = host.removeprefix("www.")
+    if not host:
+        return None
+    if host.endswith(".gov") or ".gov." in host:
+        return 1.0
+    for score, domains in _DOMAIN_TIERS.items():
+        if any(host == d or host.endswith("." + d) for d in domains):
+            return score
+    return None
+
+
+def evidence_quality(item) -> float:
+    """Blended quality of one evidence item: its source *type* tier, adjusted
+    by the URL's domain credibility when the domain is recognized."""
+    base = source_type_quality(item.source_type)
+    dq = domain_quality(getattr(item, "source_url", "") or "")
+    if dq is None:
+        return base
+    return round(0.6 * base + 0.4 * dq, 3)
+
+
 def strongest_source(evidence_items) -> Optional[str]:
     if not evidence_items:
         return None

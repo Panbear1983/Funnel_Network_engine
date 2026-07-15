@@ -56,10 +56,11 @@ uv pip install -e ".[viz,research]"   # viz = charts; research = web automation
 uv run python -m funnel
 ```
 
-**Golden path (Map tab, the default):** type a topic → **Generate** (auto-brief
-+ smart OSINT search stage the whole graph as reviewable proposals) → click any
-wrong rows to reject → **Build** (commits + exports the tree chart at all three
-detail levels + a Markdown report). One text field, two buttons.
+**Golden path (Map tab, the default):** type a topic and press **Enter** —
+auto-brief + smart OSINT search stage the graph, obvious junk is auto-rejected,
+the rest commits (re-runs merge, never duplicate), companies are enriched with
+fundamentals, and the tree chart exports at all three detail levels and opens
+itself. One text field, one key. Flip auto-build off to review proposals first.
 
 Headless equivalent:
 

@@ -111,6 +111,19 @@ def relationships(company_lines: str, brief: str) -> list[dict]:
     )
 
 
+def contradictions(edges_block: str, evidence_block: str) -> list[dict]:
+    return _msg(
+        f"Claimed relationships:\n{edges_block}\n\n"
+        f"Collected evidence:\n{evidence_block}\n\n"
+        "Identify relationships the evidence CONTRADICTS (wrong direction, "
+        "terminated, denied, or conflicting sources). Only report genuine "
+        "conflicts — an unsupported relationship is not a contradiction. "
+        "Use exact company names.\n"
+        'JSON shape: {"contradictions":[{"from":str,"to":str,"issue":str,'
+        '"source_url":str|null}]}'
+    )
+
+
 def evidence_and_deals(context: str, company_names: str, want_deals: bool) -> list[dict]:
     deals = (
         ',"deals":[{"deal_type":str,"buyer":str,"supplier":str,"product_or_service":str,'

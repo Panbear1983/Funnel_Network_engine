@@ -148,5 +148,21 @@ def export_markdown(m, path: Path) -> Path:
             out.append(f"- **{ev.source_type}** — {ev.claim or '(no claim)'} — {ref}"
                        + (f" ({ev.date})" if ev.date else ""))
 
+    contradictions = _contradiction_lines(r.id)
+    if contradictions:
+        out += ["", "## Contradictions (deep-tier check)", ""]
+        out += [f"- ⚠ {line}" for line in contradictions]
+
     path.write_text("\n".join(out) + "\n")
     return path
+
+
+def _contradiction_lines(request_id: str) -> list[str]:
+    """Contradiction notes recorded by the latest run's deep-tier check
+    (pipeline Stage 6 logs them with a ⚠ marker)."""
+    from funnel.db import repo  # local import: keeps export usable standalone
+    run = repo.latest_run(request_id)
+    if not run or not run.log:
+        return []
+    return [line.split("⚠ contradiction:", 1)[1].strip()
+            for line in run.log if "⚠ contradiction:" in line]

@@ -207,7 +207,8 @@ def run_pipeline(
         # Stage 5 — evidence + deals. With no scraped context (e.g. no Tavily
         # key) the model's own web search stands in, so evidence is never
         # silently skipped on evidence-bearing tiers.
-        ev_pairs: list[set] = []  # related-company ref sets of staged evidence
+        ev_pairs: list[set] = []   # related-company ref sets of staged evidence
+        ev_claims: list[str] = []  # claim lines for the contradiction pass
 
         def stage_evidence_items(data: dict) -> int:
             added = 0
@@ -215,6 +216,9 @@ def run_pipeline(
                 related = [r for r in (slugify(x) for x in ev.get("related_companies", []))
                            if r in company_names]
                 url = ev.get("source_url", "")
+                ev_claims.append(
+                    f"- {ev.get('claim', '')} "
+                    f"[{', '.join(company_names[r] for r in related)}] {url}")
                 add_proposal("evidence", (slugify(ev.get("claim", ""))[:40] or "ev"), {
                     "source_type": ev.get("source_type", "news"), "source_url": url,
                     "publisher": ev.get("publisher", ""), "date": ev.get("date", ""),
@@ -281,6 +285,33 @@ def run_pipeline(
                         online=online2)
                     added = stage_evidence_items(data)
                     note(f"  {added} targeted evidence items proposed.")
+
+        # Stage 6 — contradiction pass (deep tier): one bounded call checks the
+        # claimed edges against the collected evidence; contradicted edges are
+        # downgraded to "weak" before they ever reach the graph.
+        if tier.contradiction_pass and staged_edges and ev_claims:
+            note("Checking for contradictions…")
+            edges_block = "\n".join(
+                f"- {company_names[f]} → {company_names[t]} ({level})"
+                for f, t, level in staged_edges)
+            try:
+                data = llm(prompts.contradictions(edges_block, "\n".join(ev_claims)))
+            except Exception:
+                data = {}
+            flagged = 0
+            for item in data.get("contradictions", []):
+                fref, tref = slugify(item.get("from", "")), slugify(item.get("to", ""))
+                issue = item.get("issue", "conflicting evidence")
+                for p in repo.list_proposals(request_id, run_id=run.id):
+                    if p.entity_type == "edge" and p.ref_key == f"{fref}->{tref}":
+                        p.payload = {**p.payload, "evidence_level": "weak"}
+                        p.rationale = (p.rationale + " ⚠ contradicted: " + issue).strip()
+                        repo.update(p)
+                        note(f"  ⚠ contradiction: {company_names.get(fref, fref)} → "
+                             f"{company_names.get(tref, tref)} — {issue}")
+                        flagged += 1
+                        break
+            note(f"  {flagged} edges downgraded." if flagged else "  none found.")
 
         return _finish(run, "complete", log, note)
     except Exception as exc:

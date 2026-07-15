@@ -90,13 +90,18 @@ def build_graph(request_id: str) -> GraphModel:
         e.id: scorer.edge_strength(e, deal_count(e), evidence_count(e)) for e in edges
     }
 
+    # Recency decay applies unless the intake said older sources are fine.
+    older = repo.get_intake_answers(request_id).get("older_sources")
+    allow_old = bool(older and older.answer_value == "yes")
+
     relevance = {}
     source_quality = {}
     for c in companies:
         evs = evidence_by_company.get(c.id, [])
         degree = graph.degree(c.id) if c.id in graph else 0
-        source_quality[c.id] = scorer.company_source_quality(evs)
-        relevance[c.id] = scorer.company_investment_relevance(c, bottleneck, evs, degree)
+        source_quality[c.id] = scorer.company_source_quality(evs, allow_old=allow_old)
+        relevance[c.id] = scorer.company_investment_relevance(
+            c, bottleneck, evs, degree, allow_old=allow_old)
 
     return GraphModel(
         request=request,
