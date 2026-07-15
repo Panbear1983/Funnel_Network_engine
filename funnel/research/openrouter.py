@@ -43,6 +43,7 @@ def chat_json(
         "model": f"{model}:online" if online and ":" not in model else model,
         "messages": messages,
         "temperature": temperature,
+        "max_tokens": 16000,  # explicit: default caps can truncate large edge lists mid-JSON
         "response_format": {"type": "json_object"},
     }
     headers = {"Authorization": f"Bearer {key}", **_HEADERS_META}
@@ -59,6 +60,8 @@ def chat_json(
             break
         except httpx.HTTPError as exc:
             last_error = exc
+        except ValueError as exc:  # non-JSON body (gateway blip) — retryable
+            last_error = OpenRouterError(f"OpenRouter returned a non-JSON body: {exc}")
     else:
         raise OpenRouterError(f"OpenRouter request failed: {last_error}") from last_error
 

@@ -100,9 +100,17 @@ def run_pipeline(
         smart = SmartGather(gather, profile, recent_year=recent_year)
         note(f"Brief built for '{request.title or request.industry_of_interest or request_id}'.")
 
+        # Re-run anchoring: existing entity names are fed back into the prompts
+        # so a second Generate reuses them and the idempotent merge can match.
+        from funnel.db.models import CompanyNode as _CN
+        from funnel.db.models import ProcessNode as _PN
+        existing_node_names = [n.name for n in repo.list_for_request(_PN, request_id) if n.name]
+        existing_company_names = [c.name for c in repo.list_for_request(_CN, request_id) if c.name][:60]
+
         # Stage 2 — process stack
         note("Discovering process stack…")
-        data = llm(prompts.process_stack(brief, tier.max_layers, tier.expand_inputs))
+        data = llm(prompts.process_stack(brief, tier.max_layers, tier.expand_inputs,
+                                         existing=existing_node_names))
         nodes = data.get("process_nodes", [])[: tier.max_layers]
         node_refs = []
         for n in nodes:
@@ -137,11 +145,17 @@ def run_pipeline(
             if text:
                 context_pool.append(text)
             online = online_fallback and not text
-            data = llm(
-                prompts.company_discovery(name, brief, text or "(no scraped text available)",
-                                          tier.companies_per_node),
-                online=online,
-            )
+            try:
+                data = llm(
+                    prompts.company_discovery(name, brief, text or "(no scraped text available)",
+                                              tier.companies_per_node,
+                                              known=existing_company_names),
+                    online=online,
+                )
+            except Exception as exc:
+                note(f"  company discovery failed for '{name}' "
+                     f"({type(exc).__name__}) — continuing.")
+                continue
             comps = data.get("companies", [])[: tier.companies_per_node]
             for c in comps:
                 cref = slugify(c.get("name", ""))
@@ -188,7 +202,13 @@ def run_pipeline(
         if len(company_names) >= 2:
             note("Inferring relationships…")
             lines = "\n".join(f"- {name}" for name in company_names.values())
-            data = llm(prompts.relationships(lines, brief))
+            try:
+                data = llm(prompts.relationships(lines, brief))
+            except Exception as exc:
+                # One flaky LLM response must not kill the run (live run 2
+                # died here on truncated DeepSeek JSON).
+                note(f"  relationship inference failed ({type(exc).__name__}) — continuing.")
+                data = {}
             edges = data.get("edges", [])
             for e in edges:
                 fref, tref = slugify(e.get("from", "")), slugify(e.get("to", ""))
@@ -239,8 +259,12 @@ def run_pipeline(
         if tier.extract_evidence and context and company_names:
             note("Extracting evidence…" + (" (model web search)" if evidence_online else ""))
             names = ", ".join(company_names.values())
-            data = llm(prompts.evidence_and_deals(context, names, tier.extract_deals),
-                       online=evidence_online)
+            try:
+                data = llm(prompts.evidence_and_deals(context, names, tier.extract_deals),
+                           online=evidence_online)
+            except Exception as exc:
+                note(f"  evidence extraction failed ({type(exc).__name__}) — continuing.")
+                data = {}
             stage_evidence_items(data)
             for dl in data.get("deals", []):
                 add_proposal("deal", (slugify(dl.get("buyer", "") + "_" + dl.get("supplier", "")) or "deal"), {
@@ -280,9 +304,13 @@ def run_pipeline(
                     context2 = "(no scraped text — search the web for evidence)"
                     online2 = True
                 if context2:
-                    data = llm(prompts.evidence_and_deals(
-                        context2, ", ".join(company_names.values()), False),
-                        online=online2)
+                    try:
+                        data = llm(prompts.evidence_and_deals(
+                            context2, ", ".join(company_names.values()), False),
+                            online=online2)
+                    except Exception as exc:
+                        note(f"  evidence hunt failed ({type(exc).__name__}) — continuing.")
+                        data = {}
                     added = stage_evidence_items(data)
                     note(f"  {added} targeted evidence items proposed.")
 

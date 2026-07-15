@@ -54,6 +54,10 @@ def main(argv=None) -> int:
 
     if args.dry_run:
         return 0
+    if run.status != "complete" and not run.status.startswith("complete"):
+        # A failed run must not be committed (live run 2 committed a half-run).
+        print(f"NOT COMMITTED — run status is '{run.status}'. Fix and re-run.")
+        return 1
     if args.build:
         result = flow.finalize(request_id, run.id, progress=progress)
         print("BUILT", result["counts"])

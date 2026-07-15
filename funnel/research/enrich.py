@@ -49,14 +49,29 @@ def fetch_financials(ticker: str) -> dict:
     return {}
 
 
+# Model-emitted exchange suffixes -> Yahoo Finance suffixes.
+_SUFFIX_MAP = {"KR": "KS", "JP": "T", "FR": "PA", "SE": "ST", "UK": "L", "GB": "L",
+               "TW": "TW", "HK": "HK", "DE": "DE", "IT": "MI", "NL": "AS"}
+_EXCHANGE_PREFIX = {"SZSE": "SZ", "SSE": "SS", "TSE": "T", "KRX": "KS"}
+
+
 def _ticker_variants(ticker: str) -> list[str]:
-    """The raw ticker plus a dash→dot exchange-suffix variant models emit
-    ('6680-HK' → '6680.HK')."""
+    """Yahoo-compatible candidates for a model-emitted ticker: the raw form,
+    dash→dot, country-suffix remaps ('005930-KR' → '005930.KS'), and
+    exchange-prefix forms ('SZSE: 300953' → '300953.SZ')."""
+    ticker = ticker.strip()
     variants = [ticker]
-    alt = re.sub(r"-([A-Z]{1,3})$", r".\1", ticker)
-    if alt != ticker:
-        variants.append(alt)
-    return variants
+    prefix = re.match(r"^([A-Z]{2,5})\s*:\s*(\S+)$", ticker)
+    if prefix and prefix.group(1) in _EXCHANGE_PREFIX:
+        variants.append(f"{prefix.group(2)}.{_EXCHANGE_PREFIX[prefix.group(1)]}")
+    suffix = re.match(r"^(.+?)[-.]([A-Z]{2})$", ticker)
+    if suffix:
+        base, cc = suffix.groups()
+        mapped = _SUFFIX_MAP.get(cc)
+        if mapped:
+            variants.append(f"{base}.{mapped}")
+        variants.append(f"{base}.{cc}")
+    return list(dict.fromkeys(variants))  # dedup, keep order
 
 
 def enrich_companies(

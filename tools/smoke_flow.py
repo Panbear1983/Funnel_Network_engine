@@ -25,6 +25,7 @@ from funnel.research.smartsearch import INTENT_SUFFIX, PlannedQuery, SmartGather
 
 SEEN_QUERIES: list[str] = []
 EV_CALLS: list[int] = []
+ANCHORED: list[str] = []
 
 
 def fake_llm(messages, *, online=False):
@@ -37,6 +38,9 @@ def fake_llm(messages, *, online=False):
                 "known_terms": ["portafilter"], "aliases": ["coffee machines"],
                 "jargon": ["E61 group"], "key_products": ["dual boiler machines"]}
     if "value-chain process stack" in t:
+        if "reuse their EXACT names" in t:
+            assert "Boiler manufacturing" in t, "node anchor list missing"
+            ANCHORED.append("nodes")
         return {"process_nodes": [
             {"name": "Boiler manufacturing", "layer": "upstream", "keywords": [],
              "bottleneck_risk": "medium", "description": "", "rationale": ""},
@@ -50,6 +54,8 @@ def fake_llm(messages, *, online=False):
             {"node": "Machine assembly",
              "queries": [{"q": "espresso machine makers", "intent": "filings"}]}]}
     if "Identify up to" in t:
+        if "Companies already mapped" in t and "La Marzocco" in t:
+            ANCHORED.append("companies")
         if "Boiler manufacturing" in t:
             return {"companies": [
                 {"name": "IMS Boilers", "ticker": None, "country": "IT",
@@ -181,6 +187,23 @@ def run() -> None:
     assert result2["counts"]["company"] == 0, result2["counts"]  # no new inserts
     print("MERGE_OK second run merged", result2["counts"]["merged"],
           "entities, zero duplicates")
+    assert {"nodes", "companies"} <= set(ANCHORED), ANCHORED
+    print("ANCHOR_OK re-run prompts carry existing node + company names")
+
+    # --- resilience: a flaky relationships call must not kill the run -------
+    rid3 = repo.create_request("Flaky Topic").id
+
+    def flaky_llm(messages, *, online=False):
+        if "Infer supplier" in messages[-1]["content"]:
+            raise ValueError("truncated JSON")
+        return fake_llm(messages, online=online)
+
+    run_f = flow.run_research(rid3, "professional", llm=flaky_llm,
+                              gather=fake_gather, online_fallback=False)
+    assert run_f.status == "complete", run_f.summary
+    assert not [p for p in repo.list_proposals(rid3, run_id=run_f.id)
+                if p.entity_type == "edge"]
+    print("RESILIENCE_OK relationships failure degraded to 0 edges, run completed")
 
     # --- enrichment: fake fundamentals + fake estimates --------------------
     from funnel.research import enrich as enrich_mod

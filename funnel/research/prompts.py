@@ -38,11 +38,17 @@ def auto_brief(topic: str) -> list[dict]:
     )
 
 
-def process_stack(brief: str, max_layers: int, expand_inputs: bool) -> list[dict]:
+def process_stack(brief: str, max_layers: int, expand_inputs: bool,
+                  existing: list[str] | None = None) -> list[dict]:
     extra = ("Include raw-materials, equipment, and enabling-infrastructure layers where relevant."
              if expand_inputs else "Focus on the core production/service layers only.")
+    anchor = ""
+    if existing:
+        anchor = ("This request already has process nodes — reuse their EXACT names "
+                  "for equivalent stages (only add genuinely new stages):\n"
+                  + "\n".join(f"- {n}" for n in existing) + "\n\n")
     return _msg(
-        f"{brief}\n\nDecompose this into the value-chain process stack. {extra}\n"
+        f"{brief}\n\n{anchor}Decompose this into the value-chain process stack. {extra}\n"
         f"Return at most {max_layers} nodes.\n"
         'JSON shape: {"process_nodes":[{"name":str,"layer":one of ['
         f"{_LAYERS}"
@@ -75,9 +81,14 @@ def search_plan(brief: str, node_names: list[str], max_queries: int,
     )
 
 
-def company_discovery(node_name: str, brief: str, context: str, limit: int) -> list[dict]:
+def company_discovery(node_name: str, brief: str, context: str, limit: int,
+                      known: list[str] | None = None) -> list[dict]:
+    anchor = ""
+    if known:
+        anchor = ("Companies already mapped for this request — reuse their EXACT names "
+                  "when you mean the same company:\n" + ", ".join(known) + "\n\n")
     return _msg(
-        f"{brief}\n\nProcess node: {node_name}\n\nSource excerpts (OSINT):\n{context}\n\n"
+        f"{brief}\n\nProcess node: {node_name}\n\n{anchor}Source excerpts (OSINT):\n{context}\n\n"
         f"Identify up to {limit} companies active in this node. Prefer names supported by the "
         "excerpts; include a ticker only if confident.\n"
         'JSON shape: {"companies":[{"name":str,"ticker":str|null,"country":str|null,"role":one of ['
