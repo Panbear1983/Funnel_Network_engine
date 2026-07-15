@@ -21,7 +21,9 @@ from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
-from textual.widgets import Button, DataTable, Input, Label, Log, Select, Static
+from textual.widgets import (
+    Button, DataTable, Input, Label, Log, Select, Static, Switch,
+)
 
 from funnel import config
 from funnel.db import repo
@@ -86,14 +88,16 @@ class FlowPanel(Vertical):
     def compose(self) -> ComposeResult:
         yield Static("Map a value chain", classes="panel-title")
         yield Static(
-            "Type a topic and press Generate — the brief, search, and graph are "
-            "proposed for you. Click a row to reject it, then Build.",
+            "Type a topic and press Enter — the map builds itself. Flip "
+            "auto-build off to review proposals before they commit.",
             classes="flow-hint")
         with Horizontal(classes="toolbar"):
             yield Input(placeholder="Topic of interest — e.g. Chip manufacturing",
                         id="flow-topic")
             yield Select([(TIERS[k].label, k) for k in TIER_ORDER],
                          value="professional", allow_blank=False, id="flow-depth")
+            yield Switch(value=True, id="auto-build")
+            yield Static("auto-build", classes="switch-label")
             yield Button("Generate", id="flow-generate", variant="primary")
         yield Static("", id="flow-keys")
         yield Log(id="flow-log", classes="research-log")
@@ -174,7 +178,12 @@ class FlowPanel(Vertical):
         self._rows = []
         if not self.request_id or not self.run_id:
             return
-        for p in repo.list_proposals(self.request_id, run_id=self.run_id):
+        proposals = repo.list_proposals(self.request_id, run_id=self.run_id)
+        # Doubtful first: auto/manual rejections, then low-confidence, then
+        # the rest — so the rows worth a human glance lead the table.
+        proposals.sort(key=lambda p: (
+            0 if p.status == "rejected" else (1 if p.confidence < 0.4 else 2)))
+        for p in proposals:
             table.add_row(_MARK.get(p.status, "?"), p.entity_type,
                           truncate(self._proposal_label(p), 24), self._detail(p),
                           f"{p.confidence:.2f}", p.status)
@@ -299,10 +308,14 @@ class FlowPanel(Vertical):
         self._set_busy(False)
         self._log_line(f"[{status}] {summary}")
         self._render_proposals()
-        if status.startswith("complete"):
-            self.app.notify(f"{len(self._rows)} proposals staged — review, then Build.")
-        else:
+        if not status.startswith("complete"):
             self.app.notify(f"Research {status}: {summary}", severity="error")
+            return
+        if self._rows and self.query_one("#auto-build", Switch).value:
+            self._log_line("auto-build on — building map…")
+            self._start_build()
+        else:
+            self.app.notify(f"{len(self._rows)} proposals staged — review, then Build.")
 
     def _step_failed(self, message: str) -> None:
         self._set_busy(False)
@@ -338,11 +351,13 @@ class FlowPanel(Vertical):
         if refresher:
             refresher()
         self._render_proposals()
-        total = sum(result["counts"].values())
+        counts = result["counts"]
+        merged = counts.get("merged", 0)
+        new_total = sum(v for k, v in counts.items() if k != "merged")
         charts = result["charts"]
         self.query_one("#flow-result", Static).update(
-            f"[b]{total}[/b] entities committed · trees: "
-            + " · ".join(f"[b]{res}[/b]" for res in charts)
+            f"[b]{new_total}[/b] new" + (f" · [b]{merged}[/b] merged" if merged else "")
+            + " · trees: " + " · ".join(f"[b]{res}[/b]" for res in charts)
             + f" → {config.EXPORT_DIR}")
         self._open_chart(charts)
         self.app.notify("Map built — tree chart opened; all 3 levels exported.")

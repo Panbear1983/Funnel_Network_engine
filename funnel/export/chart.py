@@ -45,6 +45,15 @@ def _short(text: str, length: int) -> str:
     return text if len(text) <= length else text[: length - 1] + "…"
 
 
+def company_label(c, limit: int = 18) -> str:
+    """Chart leaf label: the company NAME, with the ticker appended only when
+    it still fits — raw tickers ('6324.T', '005930.KS') are unreadable."""
+    name = _short(c.name or c.ticker or "?", limit)
+    if c.ticker and len(name) + len(c.ticker) + 3 <= limit + 8:
+        return f"{name} ({c.ticker})"
+    return name
+
+
 def render_funnel(model, path: Path, fmt: Optional[str] = None) -> Path:
     import matplotlib
     matplotlib.use("Agg")
@@ -98,7 +107,7 @@ def render_funnel(model, path: Path, fmt: Optional[str] = None) -> Path:
             rel = model.relevance.get(c.id, 0.0)
             ax.scatter([x], [y], s=120 + rel * 680, color=_color(layer), alpha=0.85,
                        edgecolors="#263238", linewidths=0.8, zorder=4)
-            ax.text(x, y - 0.17, c.ticker or _short(c.name, 14), ha="center", va="top",
+            ax.text(x, y - 0.17, company_label(c, 14), ha="center", va="top",
                     fontsize=8, color="#102027")
 
     # relationship edges

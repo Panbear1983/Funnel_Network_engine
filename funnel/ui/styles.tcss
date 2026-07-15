@@ -172,6 +172,18 @@ ModalScreen {
     padding: 0 0 1 0;
 }
 
+/* 1-row controls sit on the middle row of the 3-row toolbar */
+#auto-build {
+    margin-top: 1;
+}
+
+.switch-label {
+    color: $text-muted;
+    padding: 0 1;
+    margin-top: 1;
+    width: auto;
+}
+
 #flow-result {
     width: 1fr;
     height: auto;

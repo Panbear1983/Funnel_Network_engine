@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
-from funnel.export.chart import LAYER_LABEL, LAYER_ORDER, _color, _short
+from funnel.export.chart import LAYER_LABEL, LAYER_ORDER, _color, _short, company_label
 
 
 @dataclass
@@ -34,7 +34,7 @@ def _companies_for_node(model, node_id: str) -> list:
 
 
 def _company_leaf(model, c, resolution: str, color: str) -> _T:
-    label = c.ticker or _short(c.name, 16)
+    label = company_label(c, 16)
     if resolution == "deep":
         rel = model.relevance.get(c.id, 0.0)
         ev = len(model.evidence_by_company.get(c.id, []))

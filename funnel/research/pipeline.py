@@ -11,7 +11,7 @@ from typing import Callable, Optional
 from funnel.db import repo
 from funnel.db.models import Proposal, ResearchRequest, ResearchRun
 from funnel.research import llm as llm_factory
-from funnel.research import prompts, smartsearch, websearch
+from funnel.research import prompts, screen, smartsearch, websearch
 from funnel.research.ingest import slugify
 from funnel.research.smartsearch import SmartGather, TopicProfile
 from funnel.research.tiers import get_tier, resolve_model
@@ -82,10 +82,12 @@ def run_pipeline(
     request = repo.get(ResearchRequest, request_id)
     run = repo.add(ResearchRun(request_id=request_id, tier=tier_key, model=model, status="running"))
 
-    def add_proposal(entity_type, ref_key, payload, rationale, confidence, sources):
+    def add_proposal(entity_type, ref_key, payload, rationale, confidence, sources,
+                     status="pending"):
         repo.add(Proposal(
             run_id=run.id, request_id=request_id, entity_type=entity_type, ref_key=ref_key,
-            payload=payload, rationale=rationale or "", confidence=confidence, sources=sources or [],
+            payload=payload, rationale=rationale or "", confidence=confidence,
+            sources=sources or [], status=status,
         ))
 
     try:
@@ -159,10 +161,22 @@ def run_pipeline(
                         "sources": c.get("sources", urls),
                     }
             note(f"  {len(comps)} companies found for '{name}'.")
+        screened = 0
         for cref, info in companies_acc.items():
+            reason = screen.screen_company(info["payload"])
+            if reason:
+                # Stage it visibly as rejected (restorable) and keep it out of
+                # the relationship/evidence stages entirely.
+                add_proposal("company", cref, info["payload"],
+                             f"auto-rejected: {reason}", info["confidence"],
+                             info["sources"], status="rejected")
+                company_names.pop(cref, None)
+                screened += 1
+                continue
             add_proposal("company", cref, info["payload"], info["rationale"],
                          info["confidence"], info["sources"])
-        note(f"  {len(companies_acc)} unique companies proposed.")
+        note(f"  {len(companies_acc) - screened} unique companies proposed"
+             + (f" ({screened} auto-rejected as non-companies)" if screened else "") + ".")
 
         # Stage 4 — relationships
         if len(company_names) >= 2:

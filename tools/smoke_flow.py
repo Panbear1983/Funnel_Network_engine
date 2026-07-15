@@ -50,8 +50,11 @@ def fake_llm(messages, *, online=False):
              "queries": [{"q": "espresso machine makers", "intent": "filings"}]}]}
     if "Identify up to" in t:
         if "Boiler manufacturing" in t:
-            return {"companies": [{"name": "IMS Boilers", "ticker": None, "country": "IT",
-                                   "role": "supplier", "confidence": 0.7, "sources": []}]}
+            return {"companies": [
+                {"name": "IMS Boilers", "ticker": None, "country": "IT",
+                 "role": "supplier", "confidence": 0.7, "sources": []},
+                {"name": "Italy", "ticker": None, "country": "IT",
+                 "role": "supplier", "confidence": 0.9, "sources": []}]}
         return {"companies": [{"name": "La Marzocco", "ticker": None, "country": "IT",
                                "role": "operator", "confidence": 0.9, "sources": []}]}
     if "Infer supplier" in t:
@@ -81,6 +84,18 @@ def run() -> None:
     _, urls2 = sg.gather_node("N2", [PlannedQuery("q2", intent="news")], 2, [])
     assert urls1 == ["http://a", "http://b"] and urls2 == [], (urls1, urls2)  # dedup
 
+    # --- unit: junk screen -------------------------------------------------
+    from funnel.research.screen import screen_company
+    assert screen_company({"name": "China"}) is not None
+    assert screen_company({"name": "China (collective industry)"}) is not None
+    assert screen_company({"name": "Various suppliers"}) is not None
+    assert screen_company({"name": "The semiconductor industry"}) is not None
+    assert screen_company({"name": ""}) is not None
+    assert screen_company({"name": "Harmonic Drive Systems"}) is None
+    assert screen_company({"name": "Mitsubishi Heavy Industries"}) is None
+    assert screen_company({"name": "Taiwan Semiconductor Manufacturing"}) is None
+    print("SCREEN_OK junk filter: places/collectives/placeholders rejected, real names pass")
+
     # --- full flow --------------------------------------------------------
     request_id = repo.create_request("Espresso machines").id
     run_row = flow.run_research(request_id, "professional",
@@ -100,16 +115,34 @@ def run() -> None:
     assert any("coffee machines" in q for q in SEEN_QUERIES), \
         ("alias retry did not fire", SEEN_QUERIES)
 
+    # junk 'Italy' was staged as auto-rejected, never committed
+    junk = [p for p in repo.list_proposals(request_id, run_id=run_row.id)
+            if p.payload.get("name") == "Italy"]
+    assert junk and junk[0].status == "rejected" and "auto-rejected" in junk[0].rationale, junk
+
     result = flow.finalize(request_id, run_row.id)
     assert set(result["charts"]) == {"high", "professional", "deep"}
     for path in result["charts"].values():
         assert os.path.getsize(path) > 1000, path
     assert os.path.exists(result["report"])
     assert repo.count_for_request(ProcessNode, request_id) == 2
-    assert repo.count_for_request(CompanyNode, request_id) == 2
+    assert repo.count_for_request(CompanyNode, request_id) == 2  # Italy screened out
     trees = [v for v in repo.list_for_request(VisualizationExport, request_id)
              if v.chart_type.startswith("tree_")]
     assert len(trees) == 3, trees
+
+    # --- idempotent merge: run the whole flow again on the same request ---
+    run2 = flow.run_research(request_id, "professional",
+                             llm=fake_llm, gather=fake_gather, online_fallback=False)
+    result2 = flow.finalize(request_id, run2.id)
+    assert repo.count_for_request(ProcessNode, request_id) == 2
+    assert repo.count_for_request(CompanyNode, request_id) == 2
+    from funnel.db.models import RelationshipEdge
+    assert repo.count_for_request(RelationshipEdge, request_id) == 1
+    assert result2["counts"]["merged"] >= 4, result2["counts"]
+    assert result2["counts"]["company"] == 0, result2["counts"]  # no new inserts
+    print("MERGE_OK second run merged", result2["counts"]["merged"],
+          "entities, zero duplicates")
 
     # re-run on the same request must NOT clobber existing intake answers
     flow.apply_brief(request_id, lambda m, **k: {"industry": "SHOULD NOT OVERWRITE"})

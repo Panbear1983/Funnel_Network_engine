@@ -297,7 +297,8 @@ async def run() -> None:
             if "Identify up to" in t:
                 return {"companies": [
                     {"name": "Foxconn", "ticker": "2317", "country": "TW", "role": "operator", "confidence": 0.8, "sources": []},
-                    {"name": "Pegatron", "ticker": "4938", "country": "TW", "role": "operator", "confidence": 0.6, "sources": []}]}
+                    {"name": "Pegatron", "ticker": "4938", "country": "TW", "role": "operator", "confidence": 0.6, "sources": []},
+                    {"name": "Taiwan", "ticker": None, "country": "TW", "role": "operator", "confidence": 0.9, "sources": []}]}
             if "Infer supplier" in t:
                 return {"edges": [{"from": "Pegatron", "to": "Foxconn", "relationship_type": "competitor",
                                    "evidence_level": "inferred", "confidence": 0.5}]}
@@ -310,58 +311,89 @@ async def run() -> None:
         _flow.run_research = functools.partial(
             _orig_run_research, llm=_fake_llm, gather=_fake_gather)
         try:
+            from textual.widgets import Switch as _Switch
+
             app.query_one("#tabs").active = "tab-flow"
             await pilot.pause()
             fpanel = app.query_one(FlowPanel)
+
+            async def wait_idle(label):
+                for _ in range(400):
+                    await pilot.pause(0.05)
+                    if not fpanel._flow_busy:
+                        return
+                raise AssertionError(f"{label} did not finish")
+
+            # ---- Run 1: one-press (auto-build ON by default) ----------------
+            assert fpanel.query_one("#auto-build", _Switch).value is True
             fpanel.query_one("#flow-topic", _Input).value = "Flow Glue Test"
             fpanel.query_one("#flow-generate").press()
-            for _ in range(200):
-                await pilot.pause(0.05)
-                if not fpanel._flow_busy:
-                    break
-            assert not fpanel._flow_busy, "generate did not finish"
+            await wait_idle("one-press run")
             r3_id = app.current_request_id
             assert repo.get(ResearchRequest, r3_id).title == "Flow Glue Test"
-            # auto-brief filled the intake + request fields
             auto_answers = repo.get_intake_answers(r3_id)
             assert auto_answers["industry"].answer_value == "Widgets", auto_answers
             assert repo.get(ResearchRequest, r3_id).geography == ["Taiwan"]
 
+            # Everything committed without a single review click; junk auto-✗.
+            rc = (repo.count_for_request(ProcessNode, r3_id),
+                  repo.count_for_request(CompanyNode, r3_id),
+                  repo.count_for_request(RelationshipEdge, r3_id))
+            assert rc == (1, 2, 1), rc  # Foxconn+Pegatron committed, 'Taiwan' screened
+            junk = [p for p in repo.list_proposals(r3_id)
+                    if p.payload.get("name") == "Taiwan"]
+            assert junk and junk[0].status == "rejected", junk
+            assert junk[0].rationale.startswith("auto-rejected"), junk[0].rationale
+            comp_names = {c.name for c in repo.list_for_request(CompanyNode, r3_id)}
+            assert "Taiwan" not in comp_names, comp_names
+            trees = [v for v in repo.list_for_request(VisualizationExport, r3_id)
+                     if v.chart_type.startswith("tree_")]
+            assert len(trees) == 3 and all(os.path.exists(v.file_path) for v in trees), trees
+            result_text = str(fpanel.query_one("#flow-result").render())
+            assert "new" in result_text, result_text
+
+            # ---- Run 2: same topic again → idempotent merge, no duplicates --
+            fpanel.query_one("#flow-generate").press()
+            await wait_idle("merge run")
+            rc2 = (repo.count_for_request(ProcessNode, r3_id),
+                   repo.count_for_request(CompanyNode, r3_id),
+                   repo.count_for_request(RelationshipEdge, r3_id))
+            assert rc2 == rc, (rc, rc2)
+            result_text = str(fpanel.query_one("#flow-result").render())
+            assert "merged" in result_text, result_text
+
+            # ---- Run 3: auto-build OFF → manual review gate still works -----
+            fpanel.query_one("#auto-build", _Switch).value = False
+            await pilot.pause()
+            fpanel.query_one("#flow-topic", _Input).value = "Flow Review Test"
+            fpanel.query_one("#flow-generate").press()
+            await wait_idle("review-mode generate")
+            r4_id = app.current_request_id
+            assert r4_id != r3_id
+            assert repo.count_for_request(CompanyNode, r4_id) == 0  # staged only
             ftable = fpanel.query_one("#flow-table")
             assert ftable.row_count == len(fpanel._rows) >= 4, ftable.row_count
+            # doubtful-first ordering: the auto-rejected junk row leads the table
+            assert repo.get(Proposal, fpanel._rows[0]).status == "rejected"
 
-            # review gate: Enter on the Pegatron row toggles reject, again restores
             peg_idx = next(i for i, pid in enumerate(fpanel._rows)
                            if repo.get(Proposal, pid).payload.get("name") == "Pegatron")
             ftable.focus()
             ftable.move_cursor(row=peg_idx)
             await pilot.press("enter")
             await pilot.pause()
-            assert repo.get(Proposal, fpanel._rows[peg_idx]).status == "rejected"
-            await pilot.press("enter")
-            await pilot.pause()
-            assert repo.get(Proposal, fpanel._rows[peg_idx]).status == "pending"
-            await pilot.press("enter")
-            await pilot.pause()
+            rejected_id = next(pid for pid in fpanel._rows
+                               if repo.get(Proposal, pid).payload.get("name") == "Pegatron")
+            assert repo.get(Proposal, rejected_id).status == "rejected"
 
             fpanel.query_one("#flow-build").press()
-            for _ in range(200):
-                await pilot.pause(0.05)
-                if not fpanel._flow_busy:
-                    break
-            assert not fpanel._flow_busy, "build did not finish"
-            rc_nodes = repo.count_for_request(ProcessNode, r3_id)
-            rc_comps = repo.count_for_request(CompanyNode, r3_id)
-            rc_edges = repo.count_for_request(RelationshipEdge, r3_id)
-            assert (rc_nodes, rc_comps, rc_edges) == (1, 1, 0), (rc_nodes, rc_comps, rc_edges)
-            trees = [v for v in repo.list_for_request(VisualizationExport, r3_id)
-                     if v.chart_type.startswith("tree_")]
-            assert len(trees) == 3 and all(os.path.exists(v.file_path) for v in trees), trees
-            result_text = str(fpanel.query_one("#flow-result").render())
-            assert "committed" in result_text, result_text
-            print("FLOW_GLUE_OK topic→request→brief→proposals→toggle→build:",
-                  "nodes", rc_nodes, "comps", rc_comps, "edges", rc_edges,
-                  "trees", sorted(v.chart_type for v in trees))
+            await wait_idle("manual build")
+            rc4 = (repo.count_for_request(ProcessNode, r4_id),
+                   repo.count_for_request(CompanyNode, r4_id),
+                   repo.count_for_request(RelationshipEdge, r4_id))
+            assert rc4 == (1, 1, 0), rc4  # Foxconn only; Pegatron ✗ manual, Taiwan ✗ auto
+            print("FLOW_GLUE_OK one-press:", rc, "| merge stable:", rc2,
+                  "| review-mode:", rc4, "| junk auto-rejected + doubtful-first")
         finally:
             _flow.run_research = _orig_run_research
 

@@ -21,7 +21,7 @@ from funnel.ui.sidebar import Sidebar  # noqa: E402
 
 async def run() -> None:
     app = FunnelApp()
-    async with app.run_test(size=(120, 40)) as pilot:
+    async with app.run_test(size=(140, 40)) as pilot:
         await pilot.pause()
         r = repo.create_request("UI Layout Check")
         app.query_one(Sidebar).reload(select_id=r.id)
@@ -53,12 +53,20 @@ async def run() -> None:
         depth_w = fp.query_one("#flow-depth").size.width
         gen = fp.query_one("#flow-generate")
         build_w = fp.query_one("#flow-build").size.width
-        assert topic_w >= 30, ("topic input too narrow", topic_w)
+        assert topic_w >= 25, ("topic input too narrow", topic_w)
         assert depth_w == 26, ("depth select", depth_w)
         assert gen.size.width >= 12 and build_w >= 12, (gen.size.width, build_w)
         topic_y = fp.query_one("#flow-topic").region.y
         assert gen.region.y in (topic_y, topic_y + 0), ("generate not on topic row",
                                                         gen.region.y, topic_y)
+
+        # auto-build switch vertically centered against the 3-row Select
+        depth = fp.query_one("#flow-depth")
+        sw = fp.query_one("#auto-build")
+        depth_center = depth.region.y + depth.size.height / 2
+        sw_center = sw.region.y + sw.size.height / 2
+        assert abs(depth_center - sw_center) <= 1, ("switch not centered",
+                                                    depth.region, sw.region)
 
         print("UI_OK  sidebar new/del=", new_w, del_w,
               "| crud add/edit/del=", add_w, edit_w, deld_w,
