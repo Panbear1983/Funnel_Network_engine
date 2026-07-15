@@ -69,9 +69,9 @@ def run_pipeline(
     model = resolve_model(tier)
     if llm is None:
         llm = llm_factory.make_llm(model)
+    injected_gather = gather is not None
     if gather is None:
         gather = websearch.gather_context
-    smart = SmartGather(gather, profile)
     log: list[str] = []
 
     def note(msg: str) -> None:
@@ -93,6 +93,11 @@ def run_pipeline(
     try:
         answers = repo.get_intake_answers(request_id)
         brief = _brief(request, answers)
+        # Recency bias: unless the intake explicitly allows older sources,
+        # searches are pinned to the current year.
+        older = answers.get("older_sources")
+        recent_year = None if (older and older.answer_value == "yes") else datetime.now().year
+        smart = SmartGather(gather, profile, recent_year=recent_year)
         note(f"Brief built for '{request.title or request.industry_of_interest or request_id}'.")
 
         # Stage 2 — process stack
@@ -179,28 +184,49 @@ def run_pipeline(
              + (f" ({screened} auto-rejected as non-companies)" if screened else "") + ".")
 
         # Stage 4 — relationships
+        staged_edges: list[tuple[str, str, str]] = []  # (from_ref, to_ref, evidence_level)
         if len(company_names) >= 2:
             note("Inferring relationships…")
             lines = "\n".join(f"- {name}" for name in company_names.values())
             data = llm(prompts.relationships(lines, brief))
             edges = data.get("edges", [])
-            kept = 0
             for e in edges:
                 fref, tref = slugify(e.get("from", "")), slugify(e.get("to", ""))
                 if fref not in company_names or tref not in company_names or fref == tref:
                     continue
                 conf = _f(e.get("confidence"), 0.4)
+                level = e.get("evidence_level", "inferred")
                 add_proposal("edge", f"{fref}->{tref}", {
                     "from_company": fref, "to_company": tref,
                     "relationship_type": e.get("relationship_type", "supplier"),
-                    "evidence_level": e.get("evidence_level", "inferred"), "confidence_score": conf,
+                    "evidence_level": level, "confidence_score": conf,
                 }, e.get("rationale", ""), conf, [])
-                kept += 1
-            note(f"  {kept} relationships proposed.")
+                staged_edges.append((fref, tref, level))
+            note(f"  {len(staged_edges)} relationships proposed.")
 
         # Stage 5 — evidence + deals. With no scraped context (e.g. no Tavily
         # key) the model's own web search stands in, so evidence is never
         # silently skipped on evidence-bearing tiers.
+        ev_pairs: list[set] = []  # related-company ref sets of staged evidence
+
+        def stage_evidence_items(data: dict) -> int:
+            added = 0
+            for ev in data.get("evidence", []):
+                related = [r for r in (slugify(x) for x in ev.get("related_companies", []))
+                           if r in company_names]
+                url = ev.get("source_url", "")
+                add_proposal("evidence", (slugify(ev.get("claim", ""))[:40] or "ev"), {
+                    "source_type": ev.get("source_type", "news"), "source_url": url,
+                    "publisher": ev.get("publisher", ""), "date": ev.get("date", ""),
+                    "claim": ev.get("claim", ""), "quote": ev.get("quote", ""),
+                    "related_companies": related,
+                    "evidence_strength": ev.get("evidence_strength", "moderate"),
+                    "confidence_score": 0.6,
+                }, "", 0.6, [url] if url else [])
+                ev_pairs.append(set(related))
+                added += 1
+            return added
+
         context = "\n\n".join(context_pool)[:12000]
         evidence_online = False
         if tier.extract_evidence and not context and online_fallback:
@@ -211,16 +237,7 @@ def run_pipeline(
             names = ", ".join(company_names.values())
             data = llm(prompts.evidence_and_deals(context, names, tier.extract_deals),
                        online=evidence_online)
-            for ev in data.get("evidence", []):
-                related = [r for r in (slugify(x) for x in ev.get("related_companies", [])) if r in company_names]
-                url = ev.get("source_url", "")
-                add_proposal("evidence", (slugify(ev.get("claim", ""))[:40] or "ev"), {
-                    "source_type": ev.get("source_type", "news"), "source_url": url,
-                    "publisher": ev.get("publisher", ""), "date": ev.get("date", ""),
-                    "claim": ev.get("claim", ""), "quote": ev.get("quote", ""),
-                    "related_companies": related, "evidence_strength": ev.get("evidence_strength", "moderate"),
-                    "confidence_score": 0.6,
-                }, "", 0.6, [url] if url else [])
+            stage_evidence_items(data)
             for dl in data.get("deals", []):
                 add_proposal("deal", (slugify(dl.get("buyer", "") + "_" + dl.get("supplier", "")) or "deal"), {
                     "deal_type": dl.get("deal_type", "partnership"),
@@ -230,6 +247,40 @@ def run_pipeline(
                     "confidence_score": 0.5,
                 }, "", 0.5, [])
             note("  evidence/deals proposed.")
+
+        # Stage 5b — per-edge evidence targeting: confirmed edges that no
+        # staged evidence covers get one bounded, targeted search pass, so the
+        # graph's strongest claims carry sources. Deterministic cap.
+        if tier.extract_evidence and staged_edges:
+            uncovered = [(f, t) for f, t, level in staged_edges
+                         if level == "confirmed"
+                         and not any(f in pair and t in pair for pair in ev_pairs)]
+            targets = uncovered[: tier.max_layers]
+            if targets:
+                note(f"Hunting evidence for {len(targets)} confirmed edges…")
+                # Real Tavily runs get a deeper search for these; injected test
+                # gathers are reused as-is. URL dedup is shared with the run.
+                ev_gather = smart if injected_gather else SmartGather(
+                    lambda q, k: websearch.gather_context(q, k, depth="advanced"),
+                    profile, recent_year=smart.recent_year, seen=smart._seen)
+                texts = []
+                for f, t in targets:
+                    query = (f"{company_names[f]} {company_names[t]} "
+                             "supply agreement partnership contract")
+                    text, _ = ev_gather.gather_query(query, tier.sources_per_query)
+                    if text:
+                        texts.append(text)
+                context2 = "\n\n".join(texts)[:10000]
+                online2 = False
+                if not context2 and online_fallback:
+                    context2 = "(no scraped text — search the web for evidence)"
+                    online2 = True
+                if context2:
+                    data = llm(prompts.evidence_and_deals(
+                        context2, ", ".join(company_names.values()), False),
+                        online=online2)
+                    added = stage_evidence_items(data)
+                    note(f"  {added} targeted evidence items proposed.")
 
         return _finish(run, "complete", log, note)
     except Exception as exc:

@@ -24,6 +24,7 @@ from funnel.research import flow  # noqa: E402
 from funnel.research.smartsearch import INTENT_SUFFIX, PlannedQuery, SmartGather  # noqa: E402
 
 SEEN_QUERIES: list[str] = []
+EV_CALLS: list[int] = []
 
 
 def fake_llm(messages, *, online=False):
@@ -62,7 +63,22 @@ def fake_llm(messages, *, online=False):
                            "relationship_type": "supplier", "evidence_level": "confirmed",
                            "confidence": 0.8}]}
     if "Extract factual claims" in t:
-        return {"evidence": []}
+        EV_CALLS.append(1)
+        if len(EV_CALLS) == 1:
+            # Stage-5 pass: evidence that does NOT cover the confirmed edge,
+            # so Stage 5b must hunt for it.
+            return {"evidence": [{"claim": "La Marzocco leads the prosumer espresso market",
+                                  "source_url": "http://ev1", "publisher": "Trade pub",
+                                  "date": "2026-05", "related_companies": ["La Marzocco"],
+                                  "source_type": "industry_pubs",
+                                  "evidence_strength": "moderate", "quote": "…"}]}
+        # Targeted (5b) pass: covers the IMS→La Marzocco confirmed edge.
+        return {"evidence": [{"claim": "IMS Boilers supplies boilers to La Marzocco",
+                              "source_url": "http://ev2", "publisher": "Press release",
+                              "date": "2026-06",
+                              "related_companies": ["IMS Boilers", "La Marzocco"],
+                              "source_type": "press_releases",
+                              "evidence_strength": "strong", "quote": "…"}]}
     return {}
 
 
@@ -83,6 +99,11 @@ def run() -> None:
     _, urls1 = sg.gather_node("N1", [PlannedQuery("q1")], 2, [])
     _, urls2 = sg.gather_node("N2", [PlannedQuery("q2", intent="news")], 2, [])
     assert urls1 == ["http://a", "http://b"] and urls2 == [], (urls1, urls2)  # dedup
+
+    caught: list[str] = []
+    sg2 = SmartGather(lambda q, k: (caught.append(q) or "t", []), recent_year=1999)
+    sg2.gather_query("boiler suppliers", 1)
+    assert caught == ["boiler suppliers 1999"], caught  # recency suffix
 
     # --- unit: junk screen -------------------------------------------------
     from funnel.research.screen import screen_company
@@ -115,6 +136,18 @@ def run() -> None:
     assert any("coffee machines" in q for q in SEEN_QUERIES), \
         ("alias retry did not fire", SEEN_QUERIES)
 
+    # Stage 5b: the confirmed edge lacked evidence after stage 5, so a
+    # targeted, recency-biased hunt query fired and its evidence was staged.
+    from datetime import datetime as _dt
+    year = str(_dt.now().year)
+    hunt = [q for q in SEEN_QUERIES if "supply agreement partnership contract" in q]
+    assert hunt and all(year in q for q in hunt), ("edge hunt missing", SEEN_QUERIES)
+    from funnel.db.models import EvidenceItem
+    ev_props = [p for p in repo.list_proposals(request_id, run_id=run_row.id)
+                if p.entity_type == "evidence"]
+    assert len(ev_props) == 2, [p.ref_key for p in ev_props]
+    print("EVIDENCE_HUNT_OK targeted query fired (recency-pinned), pair evidence staged")
+
     # junk 'Italy' was staged as auto-rejected, never committed
     junk = [p for p in repo.list_proposals(request_id, run_id=run_row.id)
             if p.payload.get("name") == "Italy"]
@@ -127,6 +160,7 @@ def run() -> None:
     assert os.path.exists(result["report"])
     assert repo.count_for_request(ProcessNode, request_id) == 2
     assert repo.count_for_request(CompanyNode, request_id) == 2  # Italy screened out
+    assert repo.count_for_request(EvidenceItem, request_id) == 2
     trees = [v for v in repo.list_for_request(VisualizationExport, request_id)
              if v.chart_type.startswith("tree_")]
     assert len(trees) == 3, trees

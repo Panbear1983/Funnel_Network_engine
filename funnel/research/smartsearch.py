@@ -99,14 +99,21 @@ def plan_queries(llm, brief: str, node_refs: list, tier,
 
 class SmartGather:
     """Wrap a base gather callable with intent phrasing, cross-node URL dedup,
-    and a single alias-retry for thin nodes."""
+    recency biasing, and a single alias-retry for thin nodes."""
 
-    def __init__(self, base: Gather, profile: TopicProfile | None = None) -> None:
+    def __init__(self, base: Gather, profile: TopicProfile | None = None,
+                 recent_year: int | None = None,
+                 seen: set[str] | None = None) -> None:
         self.base = base
         self.profile = profile
-        self._seen: set[str] = set()
+        # When set, queries are biased toward recent coverage (the intake's
+        # "allow older sources" answer clears this).
+        self.recent_year = recent_year
+        self._seen: set[str] = seen if seen is not None else set()
 
     def _run(self, query: str, k: int) -> tuple[str, list[str]]:
+        if self.recent_year:
+            query = f"{query} {self.recent_year}"
         try:
             text, urls = self.base(query, k)
         except Exception:
@@ -114,6 +121,11 @@ class SmartGather:
         fresh = [u for u in urls if u not in self._seen]
         self._seen.update(urls)
         return text or "", fresh
+
+    def gather_query(self, query: str, k: int) -> tuple[str, list[str]]:
+        """One targeted query (e.g. per-edge evidence hunting) with the same
+        dedup/recency behavior as node gathering."""
+        return self._run(query, k)
 
     def gather_node(self, node_name: str, queries: list[PlannedQuery] | None,
                     k: int, static_queries: list[str]) -> tuple[str, list[str]]:
