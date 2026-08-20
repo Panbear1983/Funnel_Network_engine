@@ -50,13 +50,16 @@ def main(argv=None) -> int:
             return 0
 
     progress = lambda m: print("·", m)  # noqa: E731
+    from funnel.research.llm import UsageTracker
+    usage = UsageTracker()  # cost visibility: summary gains "· MmSSs · N LLM calls"
     if args.topic:
         request_id = repo.create_request(args.topic).id
         print(f"REQUEST {request_id} '{args.topic}'")
-        run = flow.run_research(request_id, args.tier, progress=progress)
+        run = flow.run_research(request_id, args.tier, progress=progress, usage=usage)
     else:
         request_id = args.request
-        run = run_pipeline(request_id, args.tier, progress=progress, dry_run=args.dry_run)
+        run = run_pipeline(request_id, args.tier, progress=progress,
+                           dry_run=args.dry_run, usage=usage)
     print(f"RUN {run.id} [{run.status}] {run.summary}")
 
     if args.dry_run:
