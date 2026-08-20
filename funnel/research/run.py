@@ -37,9 +37,12 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
 
     init_db()
-    reaped = repo.reap_running_runs()
-    if reaped:
-        print(f"· {reaped} interrupted run(s) marked failed (orphaned by a previous quit).")
+    if args.request or args.topic:
+        # Reap only when about to run — a bare --list must not touch runs the
+        # TUI may have in flight.
+        reaped = repo.reap_running_runs()
+        if reaped:
+            print(f"· {reaped} interrupted run(s) marked failed (orphaned by a previous quit).")
     if args.list or not (args.request or args.topic):
         for r in repo.list_requests():
             print(r.id, "|", r.title or r.industry_of_interest or "(untitled)")

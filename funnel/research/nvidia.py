@@ -93,7 +93,7 @@ def chat_json(
             body_lower = response.text.lower() if response.status_code in (400, 422) else ""
             if ("response_format" in payload
                     and response.status_code in (400, 422)
-                    and ("response_format" in body_lower or "json" in body_lower)):
+                    and "response_format" in body_lower):
                 # This model rejects json mode — strip it, remember, retry
                 # immediately (does not consume a backoff attempt).
                 _NO_JSON_MODE.add(model)
@@ -112,16 +112,17 @@ def chat_json(
             choices = data.get("choices") or []
             if not choices:
                 raise NvidiaError(f"NVIDIA returned no choices: {str(data)[:200]}")
+            # Usage counts every completed HTTP attempt — a retried
+            # non-JSON generation still burned tokens.
+            if on_usage is not None:
+                u = data.get("usage") or {}
+                on_usage({"calls": 1,
+                          "prompt_tokens": u.get("prompt_tokens", 0) or 0,
+                          "completion_tokens": u.get("completion_tokens", 0) or 0})
             content = (choices[0].get("message") or {}).get("content") or ""
             content = _THINK_RE.sub("", content)  # drop reasoning traces
             try:
-                parsed = _parse_json(content)
-                if on_usage is not None:
-                    u = data.get("usage") or {}
-                    on_usage({"calls": 1,
-                              "prompt_tokens": u.get("prompt_tokens", 0) or 0,
-                              "completion_tokens": u.get("completion_tokens", 0) or 0})
-                return parsed
+                return _parse_json(content)
             except Exception as exc:
                 last_error = NvidiaError(
                     f"Non-JSON output from {model}: {content[:200]!r}")

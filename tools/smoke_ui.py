@@ -297,6 +297,26 @@ async def run() -> None:
         assert "Research stopped" in failed_guidance
         assert "Next:" in failed_guidance
 
+        # A user cancel is a first-class outcome: guidance mentions the kept
+        # items and nothing auto-builds. (Regression: this used to fall into
+        # the 'Unknown research outcome' error path.)
+        fp._generate_done(
+            "cancelled-run", ResearchRunOutcome.CANCELLED.value,
+            "cancelled: 3 items; cancelled by user — staged items kept")
+        assert auto_actions == ["finish", "finish"], auto_actions
+        cancelled_guidance = str(fp.query_one("#flow-status").render())
+        assert "cancelled" in cancelled_guidance.casefold(), cancelled_guidance
+        assert "kept" in cancelled_guidance, cancelled_guidance
+
+        # Switching requests clears stale outcome guidance from #flow-status.
+        other = repo.create_request("Another request")
+        fp.load_request(other.id)
+        await pilot.pause()
+        assert str(fp.query_one("#flow-status").render()) == "", \
+            "stale guidance leaked across request switch"
+        fp.load_request(r.id)
+        await pilot.pause()
+
         # Expanding the explicit advanced path restores the manual controls.
         advanced.collapsed = False
         await pilot.pause()

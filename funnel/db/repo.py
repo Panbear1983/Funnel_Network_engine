@@ -146,16 +146,20 @@ def latest_run(request_id: str) -> Optional[m.ResearchRun]:
         return runs[-1] if runs else None
 
 
-def reap_running_runs() -> int:
-    """Mark every ResearchRun still status='running' as failed. Called at
-    startup: this is a single-user single-process app, so any 'running' row at
-    launch was orphaned by a quit/crash mid-run. Staged proposals are kept
-    (reviewable/salvageable via the Map review path)."""
-    from datetime import datetime
+def reap_running_runs(min_age_minutes: int = 60) -> int:
+    """Mark orphaned status='running' ResearchRuns as failed. Only runs older
+    than min_age_minutes are touched: the TUI and the CLI share this SQLite
+    file and may run at the same time, so a young 'running' row is presumed
+    live, not orphaned. (Even if a live run is mis-reaped, its own _finish
+    overwrites the status.) Staged proposals are kept."""
+    from datetime import datetime, timedelta
+    cutoff = datetime.now() - timedelta(minutes=min_age_minutes)
     reaped = 0
     with new_session() as s:
         for run in s.exec(select(m.ResearchRun)
                           .where(m.ResearchRun.status == "running")):
+            if run.started_at and run.started_at > cutoff:
+                continue  # young enough to be a live concurrent run
             run.status = m.ResearchRunOutcome.FAILED.value
             run.summary = ("interrupted: the app quit while this run was in "
                            "progress; staged items remain reviewable")

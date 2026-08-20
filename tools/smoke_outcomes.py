@@ -107,16 +107,26 @@ def run() -> None:
     assert any("process stack discovery" in line for line in stack_failed.log), (
         stack_failed.log)
 
-    # Startup reaper: an orphaned status="running" row is marked failed.
+    # Startup reaper: an OLD orphaned status="running" row is marked failed,
+    # but a YOUNG one is presumed a live concurrent run (CLI vs TUI share the
+    # DB) and left alone.
+    from datetime import datetime, timedelta
     from funnel.db.models import ResearchRun
     orphan = repo.add(ResearchRun(request_id=rid, tier="professional",
-                                  model="m", status="running"))
+                                  model="m", status="running",
+                                  started_at=datetime.now() - timedelta(hours=2)))
+    young = repo.add(ResearchRun(request_id=rid, tier="professional",
+                                 model="m", status="running"))
     reaped = repo.reap_running_runs()
     assert reaped == 1, reaped
     orphan2 = repo.get(ResearchRun, orphan.id)
     assert orphan2.status == ResearchRunOutcome.FAILED.value
     assert "interrupted" in orphan2.summary and orphan2.finished_at is not None
+    young2 = repo.get(ResearchRun, young.id)
+    assert young2.status == "running", "young live run must not be reaped"
     assert repo.reap_running_runs() == 0        # idempotent
+    assert repo.reap_running_runs(min_age_minutes=0) == 1  # explicit override
+    repo.delete(ResearchRun, young.id)          # keep later asserts clean
 
     rid = request("gather")
 

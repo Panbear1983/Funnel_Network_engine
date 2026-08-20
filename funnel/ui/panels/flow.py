@@ -273,6 +273,8 @@ class FlowPanel(JobRunnerMixin, VerticalScroll):
         latest = repo.latest_run(request_id) if request_id else None
         self.run_id = latest.id if latest else None
         self.query_one("#flow-result", Static).update("")
+        if not self._flow_busy:
+            self.query_one("#flow-status", Static).update("")
         self._render_proposals()
         self._render_coverage()
         self._update_dossier_line()
@@ -485,6 +487,7 @@ class FlowPanel(JobRunnerMixin, VerticalScroll):
         log = self.query_one("#flow-log", Log)
         log.clear()
         self.query_one("#flow-coverage", Static).update("")
+        self.query_one("#flow-coverage-wrap", Collapsible).display = False
         self.query_one("#flow-result", Static).update("")
         tier = self._depth()
         log.write_line(f"Building map for '{topic}' ({get_tier(tier).label})…")
@@ -532,7 +535,11 @@ class FlowPanel(JobRunnerMixin, VerticalScroll):
         self._log_line(f"[{status}] {summary}")
         self._render_proposals()
         self._render_coverage()
-        if self._rows:
+        # Focus the review table so v/a/d work — but only when it is actually
+        # visible (focusing a table inside the collapsed Advanced section would
+        # route keys to an invisible widget).
+        if self._rows and not self.query_one(
+                "#flow-advanced-review", Collapsible).collapsed:
             self.query_one("#flow-table", DataTable).focus()
         auto_build = self.query_one("#auto-build", Switch).value
         key_name = config.llm_key_name()
@@ -540,15 +547,10 @@ class FlowPanel(JobRunnerMixin, VerticalScroll):
             status, auto_build=auto_build, key_name=key_name)
         if guidance:
             self.query_one("#flow-status", Static).update(guidance)
-        if status == ResearchRunOutcome.NEEDS_CREDENTIALS.value:
-            self.app.notify(
-                f"Research credentials are needed; the request was saved.",
-                severity="warning",
-            )
-            return
-        if status == ResearchRunOutcome.NO_CREDIBLE_RESULTS.value:
-            self.app.notify("No credible results yet; refine and try again.",
-                            severity="warning")
+        # The #flow-status guidance line carries the outcome; toasts only add
+        # signal for hard failures and the deliberate cancel.
+        if status == ResearchRunOutcome.CANCELLED.value:
+            self.app.notify("Run cancelled — staged items are kept for review.")
             return
         if status == ResearchRunOutcome.FAILED.value:
             self.app.notify(f"Research failed: {summary}", severity="error")
@@ -557,14 +559,9 @@ class FlowPanel(JobRunnerMixin, VerticalScroll):
             ResearchRunOutcome.COMPLETE.value,
             ResearchRunOutcome.PARTIAL.value,
         }:
-            self.app.notify(f"Unknown research outcome '{status}': {summary}",
-                            severity="error")
+            # needs_credentials / no_credible_results / anything future: the
+            # status line already explains the next step.
             return
-        if status == ResearchRunOutcome.PARTIAL.value:
-            self.app.notify(
-                "Partial research saved — building the usable map items found.",
-                severity="warning",
-            )
         if self._rows and auto_build:
             self._log_line("automatic building on — finishing map…")
             self._start_build()
@@ -664,6 +661,7 @@ class FlowPanel(JobRunnerMixin, VerticalScroll):
         topic = (self.query_one("#flow-topic", Input).value.strip()
                  or industry or "ISR seed")
         request_id = self._ensure_request(topic)
+        self._usage = None                     # no LLM calls in a seed run
         self._set_busy(True)
         self._set_active_stage("Seeding a map from ISR (no LLM)…")
         self._log_line("Seeding from the ISR knowledge base…")

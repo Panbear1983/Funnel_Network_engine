@@ -89,7 +89,10 @@ def commit_proposals(request_id: str, run_id: str | None = None) -> dict:
 
     for p in by_type.get("process_node", []):
         d = p.payload
-        node = existing_nodes.get(p.ref_key)
+        # Look up by the payload NAME's slug (not the stored ref_key): proposals
+        # staged before the CJK guard carry legacy 'x' ref_keys that would miss
+        # rows now keyed by entity_slug.
+        node = existing_nodes.get(entity_slug(d.get("name", "")) or p.ref_key)
         if node is not None:
             _fill(node, "description", d.get("description"))
             _fill(node, "keywords", d.get("keywords"))
@@ -112,7 +115,7 @@ def commit_proposals(request_id: str, run_id: str | None = None) -> dict:
     for p in by_type.get("company", []):
         d = p.payload
         node_ids = [node_map[k] for k in d.get("process_node_ids", []) if k in node_map]
-        company = existing_companies.get(p.ref_key)
+        company = existing_companies.get(entity_slug(d.get("name", "")) or p.ref_key)
         if company is not None:
             merged_ids = list(company.process_node_ids or [])
             merged_ids.extend(nid for nid in node_ids if nid not in merged_ids)

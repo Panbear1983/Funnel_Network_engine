@@ -159,7 +159,7 @@ Open **Advanced** (F2) for one flat row of optional workspaces:
   if switching requests would discard them.
 - **Nodes / Companies / Relations / Evidence / Deals** — hand-edit anything the
   automation got wrong; deletes ask for confirmation. In **Companies**, the
-  **Dossier** button (or **i**) opens the ISR research dossier for the selected
+  **Dossier** button (or **d**) opens the ISR research dossier for the selected
   row, and **Ctrl+F** inside the company form autofills ticker/exchange/country
   from the ISR knowledge base (when the sibling ISR repo is present).
 - **Analysis / Export** — scored summaries, canned graph queries, and extra

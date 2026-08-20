@@ -82,16 +82,17 @@ def chat_json(
             choices = data.get("choices") or []
             if not choices:
                 raise OpenRouterError(f"OpenRouter returned no choices: {str(data)[:200]}")
+            # Usage counts every completed HTTP attempt — a retried
+            # non-JSON generation still burned tokens.
+            if on_usage is not None:
+                u = data.get("usage") or {}
+                on_usage({"calls": 1,
+                          "prompt_tokens": u.get("prompt_tokens", 0) or 0,
+                          "completion_tokens": u.get("completion_tokens", 0) or 0})
             content = (choices[0].get("message") or {}).get("content") or ""
             try:
                 # Parse inside the loop: truncated/chatty output re-requests.
-                parsed = _parse_json(content)
-                if on_usage is not None:
-                    u = data.get("usage") or {}
-                    on_usage({"calls": 1,
-                              "prompt_tokens": u.get("prompt_tokens", 0) or 0,
-                              "completion_tokens": u.get("completion_tokens", 0) or 0})
-                return parsed
+                return _parse_json(content)
             except Exception:
                 last_error = OpenRouterError(
                     f"Non-JSON output from {model}: {content[:200]!r}")

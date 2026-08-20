@@ -107,7 +107,7 @@ status line shows a green `● ISR <n> co.` when it is active. What it adds:
   screening trusts them, empty tickers/countries/exchanges are auto-filled, and
   weekly maintenance screenings become dated evidence.
 - **Dossiers** — the 22-field company dossier is one keypress away (`d` on the
-  Map, `i`/Dossier in Advanced → Companies, `Ctrl+F` autofill in the company
+  Map, `d`/Dossier in Advanced → Companies, `Ctrl+F` autofill in the company
   form), with a staleness cue (green/yellow/red by dossier age).
 - **Seed from ISR (no LLM)** — pick an industry/tier on the Map and press
   **Seed from ISR** to build a map straight from the curated universe, with
