@@ -37,6 +37,9 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
 
     init_db()
+    reaped = repo.reap_running_runs()
+    if reaped:
+        print(f"· {reaped} interrupted run(s) marked failed (orphaned by a previous quit).")
     if args.list or not (args.request or args.topic):
         for r in repo.list_requests():
             print(r.id, "|", r.title or r.industry_of_interest or "(untitled)")
@@ -61,6 +64,12 @@ def main(argv=None) -> int:
     }:
         # Non-buildable runs must not be committed (live run 2 committed a half-run).
         print(f"NOT COMMITTED — run status is '{run.status}'. Fix and re-run.")
+        if run.status == ResearchRunOutcome.NEEDS_CREDENTIALS.value:
+            from funnel import config
+            hint = config.other_provider_hint()
+            print(f"  set {config.llm_key_name()} in .env at the repo root "
+                  f"(copy .env.example if needed)"
+                  + (f" {hint}" if hint else ""))
         return 1
     if args.build:
         result = flow.finalize(request_id, run.id, progress=progress)

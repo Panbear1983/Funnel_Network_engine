@@ -146,6 +146,26 @@ def latest_run(request_id: str) -> Optional[m.ResearchRun]:
         return runs[-1] if runs else None
 
 
+def reap_running_runs() -> int:
+    """Mark every ResearchRun still status='running' as failed. Called at
+    startup: this is a single-user single-process app, so any 'running' row at
+    launch was orphaned by a quit/crash mid-run. Staged proposals are kept
+    (reviewable/salvageable via the Map review path)."""
+    from datetime import datetime
+    reaped = 0
+    with new_session() as s:
+        for run in s.exec(select(m.ResearchRun)
+                          .where(m.ResearchRun.status == "running")):
+            run.status = m.ResearchRunOutcome.FAILED.value
+            run.summary = ("interrupted: the app quit while this run was in "
+                           "progress; staged items remain reviewable")
+            run.finished_at = datetime.now()
+            s.add(run)
+            reaped += 1
+        s.commit()
+    return reaped
+
+
 # --- optional local map feedback -----------------------------------------
 
 def save_map_feedback(

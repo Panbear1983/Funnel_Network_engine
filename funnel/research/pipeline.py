@@ -20,7 +20,7 @@ from funnel.intake.questions import RESEARCH_CONTEXT_ID
 from funnel.knowledge.isr import IsrCompany, IsrKnowledge
 from funnel.research import llm as llm_factory
 from funnel.research import prompts, screen, smartsearch, websearch
-from funnel.research.ingest import slugify
+from funnel.research.ingest import entity_slug, slugify
 from funnel.research.smartsearch import SmartGather, TopicProfile
 from funnel.research.tiers import get_tier, resolve_model
 
@@ -169,15 +169,20 @@ def run_pipeline(
         existing_node_names = [n.name for n in repo.list_for_request(_PN, request_id) if n.name]
         existing_company_names = [c.name for c in repo.list_for_request(_CN, request_id) if c.name][:60]
 
-        # Stage 2 — process stack
+        # Stage 2 — process stack. Guarded: one flaky response here must not
+        # FAIL the whole run — an empty stack degrades to NO_CREDIBLE_RESULTS.
         note("Discovering process stack…")
-        data = llm(prompts.process_stack(brief, tier.max_layers, tier.expand_inputs,
-                                         existing=existing_node_names))
+        try:
+            data = llm(prompts.process_stack(brief, tier.max_layers, tier.expand_inputs,
+                                             existing=existing_node_names))
+        except Exception as exc:
+            skip("process stack discovery", exc)
+            data = {}
         nodes = data.get("process_nodes", [])[: tier.max_layers]
         node_refs = []
         node_keywords: dict[str, list[str]] = {}
         for n in nodes:
-            ref = slugify(n.get("name", ""))
+            ref = entity_slug(n.get("name", ""))
             if not ref:
                 continue
             node_refs.append((ref, n.get("name", "")))
@@ -236,7 +241,7 @@ def run_pipeline(
                 continue
             comps = data.get("companies", [])[: tier.companies_per_node]
             for c in comps:
-                cref = slugify(c.get("name", ""))
+                cref = entity_slug(c.get("name", ""))
                 if not cref:
                     continue
                 company_names[cref] = c.get("name", "")
@@ -315,7 +320,7 @@ def run_pipeline(
                 data = {}
             edges = data.get("edges", [])
             for e in edges:
-                fref, tref = slugify(e.get("from", "")), slugify(e.get("to", ""))
+                fref, tref = entity_slug(e.get("from", "")), entity_slug(e.get("to", ""))
                 if fref not in company_names or tref not in company_names or fref == tref:
                     continue
                 conf = _f(e.get("confidence"), 0.4)
@@ -329,28 +334,36 @@ def run_pipeline(
             note(f"  {len(staged_edges)} relationships proposed.")
 
         # Stage 5 — evidence + deals. With no scraped context (e.g. no Tavily
-        # key) the model's own web search stands in, so evidence is never
-        # silently skipped on evidence-bearing tiers.
+        # key), providers WITH their own web search stand in; a provider
+        # without one (NVIDIA) answers from training knowledge, so that
+        # evidence is marked model_knowledge and capped at "weak" — its URLs
+        # were never fetched and may be misremembered.
         ev_pairs: list[set] = []   # related-company ref sets of staged evidence
         ev_claims: list[str] = []  # claim lines for the contradiction pass
+        web_capable = llm_factory.provider_web_capable()
 
-        def stage_evidence_items(data: dict) -> int:
+        def stage_evidence_items(data: dict, *, provenance: str = "scraped") -> int:
             added = 0
+            unverified = provenance == "model_knowledge"
             for ev in data.get("evidence", []):
-                related = [r for r in (slugify(x) for x in ev.get("related_companies", []))
+                related = [r for r in (entity_slug(x) for x in ev.get("related_companies", []))
                            if r in company_names]
                 url = ev.get("source_url", "")
                 ev_claims.append(
                     f"- {ev.get('claim', '')} "
                     f"[{', '.join(company_names[r] for r in related)}] {url}")
-                add_proposal("evidence", (slugify(ev.get("claim", ""))[:40] or "ev"), {
+                strength = ev.get("evidence_strength", "moderate")
+                if unverified and strength in ("strong", "moderate"):
+                    strength = "weak"
+                add_proposal("evidence", (entity_slug(ev.get("claim", ""))[:40] or "ev"), {
                     "source_type": ev.get("source_type", "news"), "source_url": url,
                     "publisher": ev.get("publisher", ""), "date": ev.get("date", ""),
                     "claim": ev.get("claim", ""), "quote": ev.get("quote", ""),
                     "related_companies": related,
-                    "evidence_strength": ev.get("evidence_strength", "moderate"),
-                    "confidence_score": 0.6,
-                }, "", 0.6, [url] if url else [])
+                    "evidence_strength": strength,
+                    "provenance": provenance,
+                    "confidence_score": 0.4 if unverified else 0.6,
+                }, "", 0.4 if unverified else 0.6, [url] if url else [])
                 ev_pairs.append(set(related))
                 added += 1
             return added
@@ -361,7 +374,10 @@ def run_pipeline(
             context = "(no scraped text available — search the web for evidence)"
             evidence_online = True
         if tier.extract_evidence and context and company_names:
-            note("Extracting evidence…" + (" (model web search)" if evidence_online else ""))
+            if evidence_online and not web_capable:
+                note("⚠ no scraped sources and no model web search — evidence "
+                     "will be model-recalled and marked unverified.")
+            note("Extracting evidence…" + (" (model web search)" if evidence_online and web_capable else ""))
             names = ", ".join(company_names.values())
             try:
                 data = llm(prompts.evidence_and_deals(context, names, tier.extract_deals),
@@ -369,11 +385,14 @@ def run_pipeline(
             except Exception as exc:
                 skip("evidence extraction", exc)
                 data = {}
-            stage_evidence_items(data)
+            stage_evidence_items(
+                data,
+                provenance=("model_knowledge"
+                            if evidence_online and not web_capable else "scraped"))
             for dl in data.get("deals", []):
-                add_proposal("deal", (slugify(dl.get("buyer", "") + "_" + dl.get("supplier", "")) or "deal"), {
+                add_proposal("deal", (entity_slug(dl.get("buyer", "") + "_" + dl.get("supplier", "")) or "deal"), {
                     "deal_type": dl.get("deal_type", "partnership"),
-                    "buyer": slugify(dl.get("buyer", "")), "supplier": slugify(dl.get("supplier", "")),
+                    "buyer": entity_slug(dl.get("buyer", "")), "supplier": entity_slug(dl.get("supplier", "")),
                     "product_or_service": dl.get("product_or_service", ""),
                     "announced_date": dl.get("announced_date", ""), "deal_value": dl.get("deal_value"),
                     "confidence_score": 0.5,
@@ -415,7 +434,10 @@ def run_pipeline(
                     except Exception as exc:
                         skip("targeted evidence hunt", exc)
                         data = {}
-                    added = stage_evidence_items(data)
+                    added = stage_evidence_items(
+                        data,
+                        provenance=("model_knowledge"
+                                    if online2 and not web_capable else "scraped"))
                     note(f"  {added} targeted evidence items proposed.")
 
         # Stage 5c — ISR maintenance evidence (offline, bounded). Weekly
@@ -433,13 +455,14 @@ def run_pipeline(
                     claim = (f"[ISR {hit.base_ticker or hit.name} "
                              f"{sc.week_start}] {sc.reason}")
                     url = sc.source_urls[0] if sc.source_urls else ""
-                    add_proposal("evidence", slugify(claim)[:40] or "ev", {
+                    add_proposal("evidence", entity_slug(claim)[:40] or "ev", {
                         "source_type": "analyst_reports", "source_url": url,
                         "publisher": "ISR maintenance screening",
                         "date": sc.evidence_date or sc.week_start,
                         "claim": claim, "quote": "",
                         "related_companies": [cref],
                         "evidence_strength": "moderate",
+                        "provenance": "isr",
                         "confidence_score": 0.6,
                     }, "", 0.6, [f"isr:{hit.base_ticker or hit.name}",
                                  *sc.source_urls])
@@ -464,7 +487,7 @@ def run_pipeline(
                 data = {}
             flagged = 0
             for item in data.get("contradictions", []):
-                fref, tref = slugify(item.get("from", "")), slugify(item.get("to", ""))
+                fref, tref = entity_slug(item.get("from", "")), entity_slug(item.get("to", ""))
                 issue = item.get("issue", "conflicting evidence")
                 for p in repo.list_proposals(request_id, run_id=run.id):
                     if p.entity_type == "edge" and p.ref_key == f"{fref}->{tref}":
@@ -497,14 +520,19 @@ def run_pipeline(
 
 
 def _is_credentials_error(exc: Exception) -> bool:
-    """Recognize provider credential failures without coupling to one SDK."""
+    """Recognize provider credential failures without coupling to one SDK.
+    Covers both missing keys ("API_KEY is not set") and rejected keys
+    (401/403 Unauthorized / invalid api key / authentication)."""
     current: BaseException | None = exc
     while current is not None:
         text = str(current).casefold()
         if (
-            "api_key" in text
-            and any(word in text for word in ("not set", "missing", "not configured"))
-        ) or "credential" in text:
+            ("api_key" in text or "api key" in text)
+            and any(word in text for word in
+                    ("not set", "missing", "not configured", "rejected",
+                     "invalid", "check"))
+        ) or "credential" in text or "unauthorized" in text \
+                or "authentication" in text or "401" in text:
             return True
         current = current.__cause__ or current.__context__
     return False

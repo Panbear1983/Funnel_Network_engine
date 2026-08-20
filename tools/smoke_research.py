@@ -98,9 +98,99 @@ def run():
     assert len(edges) == 1, [(e.from_company, e.to_company) for e in edges]  # CATL->LG skipped
     assert len(evs) == 1 and len(evs[0].related_companies) == 2, evs
 
+    # --- CJK names must NOT collapse into one entity (entity_slug guard) ----
+    def cjk_llm(messages, *, online=False):
+        text = messages[-1]["content"]
+        if "process stack" in text:
+            return {"process_nodes": [
+                {"name": "晶圓代工", "layer": "midstream", "keywords": [],
+                 "bottleneck_risk": "high", "description": "", "rationale": ""},
+            ]}
+        if "Identify up to" in text:
+            return {"companies": [
+                {"name": "台積電", "ticker": None, "country": "TW",
+                 "role": "operator", "confidence": 0.9, "sources": []},
+                {"name": "聯發科", "ticker": None, "country": "TW",
+                 "role": "operator", "confidence": 0.8, "sources": []},
+            ]}
+        if "Infer supplier" in text:
+            return {"edges": [
+                {"from": "台積電", "to": "聯發科", "relationship_type": "supplier",
+                 "evidence_level": "inferred", "confidence": 0.5},
+            ]}
+        return {}
+
+    r2 = repo.create_request("CJK value chain")
+    r2.industry_of_interest = "半導體"
+    repo.update(r2)
+    run2 = run_pipeline(r2.id, "high_level", llm=cjk_llm,
+                        gather=fake_gather, online_fallback=False)
+    props2 = repo.list_proposals(r2.id, run_id=run2.id)
+    comp_refs = {p.ref_key for p in props2 if p.entity_type == "company"}
+    assert len(comp_refs) == 2 and "x" not in comp_refs, comp_refs
+    counts2 = commit_proposals(r2.id, run_id=run2.id)
+    comps2 = repo.list_for_request(CompanyNode, r2.id)
+    edges2 = repo.list_for_request(RelationshipEdge, r2.id)
+    assert len(comps2) == 2, [c.name for c in comps2]     # NOT merged into one
+    assert len(edges2) == 1, "CJK edge endpoints must resolve"
+    assert edges2[0].from_company != edges2[0].to_company
+    # Re-run merges idempotently — no duplicates.
+    run2b = run_pipeline(r2.id, "high_level", llm=cjk_llm,
+                         gather=fake_gather, online_fallback=False)
+    commit_proposals(r2.id, run_id=run2b.id)
+    assert repo.count_for_request(CompanyNode, r2.id) == 2, "CJK re-run duplicated"
+
+    # --- unscraped evidence on a non-web provider is marked model_knowledge --
+    os.environ["FUNNEL_LLM_PROVIDER"] = "nvidia"   # no web-search fallback
+
+    def recall_llm(messages, *, online=False):
+        text = messages[-1]["content"]
+        if "process stack" in text:
+            return {"process_nodes": [
+                {"name": "Assembly", "layer": "midstream", "keywords": [],
+                 "bottleneck_risk": "low", "description": "", "rationale": ""}]}
+        if "Identify up to" in text:
+            return {"companies": [
+                {"name": "Foxconn", "ticker": "2317", "country": "TW",
+                 "role": "operator", "confidence": 0.8, "sources": []}]}
+        if "Extract factual claims" in text:
+            return {"evidence": [
+                {"claim": "Foxconn assembles the product", "source_url": "http://maybe-fake",
+                 "publisher": "memory", "date": "2026", "related_companies": ["Foxconn"],
+                 "source_type": "news", "evidence_strength": "strong", "quote": "..."}]}
+        return {}
+
+    r3 = repo.create_request("unscraped evidence")
+    r3.industry_of_interest = "Widgets"
+    repo.update(r3)
+    run3 = run_pipeline(r3.id, "professional", llm=recall_llm,
+                        gather=lambda q, k: ("", []), online_fallback=True)
+    ev3 = [p for p in repo.list_proposals(r3.id, run_id=run3.id)
+           if p.entity_type == "evidence"]
+    assert ev3, "expected model-recalled evidence proposals"
+    assert all(p.payload.get("provenance") == "model_knowledge" for p in ev3), ev3
+    assert all(p.payload["evidence_strength"] == "weak" for p in ev3), (
+        [p.payload["evidence_strength"] for p in ev3])          # strong capped
+    assert any("model-recalled" in line for line in run3.log), run3.log
+    commit_proposals(r3.id, run_id=run3.id)
+    evs3 = repo.list_for_request(EvidenceItem, r3.id)
+    assert all(e.provenance == "model_knowledge" for e in evs3), evs3
+    # A scraped run stays "scraped".
+    r4 = repo.create_request("scraped evidence")
+    r4.industry_of_interest = "Widgets"
+    repo.update(r4)
+    run4 = run_pipeline(r4.id, "professional", llm=recall_llm,
+                        gather=fake_gather, online_fallback=False)
+    ev4 = [p for p in repo.list_proposals(r4.id, run_id=run4.id)
+           if p.entity_type == "evidence"]
+    assert ev4 and all(p.payload.get("provenance") == "scraped" for p in ev4), ev4
+    assert all(p.payload["evidence_strength"] == "strong" for p in ev4)
+
     print("RESEARCH_OK proposals=", {k: len(v) for k, v in by.items()},
           "committed=", counts, "-> nodes", len(nodes), "comps", len(comps),
-          "edges", len(edges), "evidence", len(evs))
+          "edges", len(edges), "evidence", len(evs),
+          "| CJK distinct:", sorted(comp_refs),
+          "| provenance model_knowledge+scraped OK")
 
 
 if __name__ == "__main__":

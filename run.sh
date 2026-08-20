@@ -15,7 +15,7 @@ fi
 uv sync --extra viz --extra research --extra intel
 
 if [ ! -f .env ]; then
-    echo "warning: no .env file — the Research tab (Ctrl+N) needs NVIDIA_API_KEY (build.nvidia.com) and, recommended, TAVILY_API_KEY." >&2
+    echo "warning: no .env file — copy .env.example to .env and set NVIDIA_API_KEY (build.nvidia.com); TAVILY_API_KEY recommended." >&2
 fi
 
 exec uv run python -m funnel

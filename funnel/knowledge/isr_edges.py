@@ -29,7 +29,7 @@ from funnel.db import repo
 from funnel.db.models import CompanyNode, Proposal, ResearchRun
 from funnel.knowledge.isr import IsrKnowledge, get_isr, split_ticker, yahoo_ticker
 from funnel.research import prompts
-from funnel.research.ingest import commit_proposals, slugify
+from funnel.research.ingest import commit_proposals, entity_slug, slugify
 
 Progress = Callable[[str], None]
 
@@ -73,7 +73,7 @@ def mine_isr_relationships(
     competitors = str(dossier.get("Key Competitors", "") or "")
     blob = " ".join((core, clients, competitors))
 
-    subj_ref = slugify(subject_company.name)
+    subj_ref = entity_slug(subject_company.name)
     subj_yk = (_ykey(subject_company.ticker, subject_company.country)
                if subject_company.ticker else None)
     isr_tag = f"isr:{subject_hit.base_ticker or subject_hit.name}"
@@ -130,7 +130,7 @@ def mine_isr_relationships(
             continue  # the subject named itself as a counterparty
         existing = existing_by_ticker.get(yk)
         if existing is not None:
-            cp_ref = slugify(existing.name)
+            cp_ref = entity_slug(existing.name)
             cp_payload = {"name": existing.name, "ticker": existing.ticker,
                           "country": existing.country,
                           "role": existing.role or "operator"}

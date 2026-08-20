@@ -153,11 +153,16 @@ class EvidencePanel(CrudPanel):
     entity_name = "evidence"
 
     def row_cells(self, e) -> tuple:
+        # "~" marks model-recalled evidence: no source was fetched, the URL
+        # is unverified (see EvidenceItem.provenance).
+        strength = e.evidence_strength
+        if getattr(e, "provenance", "") == "model_knowledge":
+            strength = f"~{strength}"
         return (
             tier_badge(e.source_type),
             e.publisher or "—",
             truncate(e.claim, 44),
-            e.evidence_strength,
+            strength,
             str(len(e.related_companies)),
         )
 

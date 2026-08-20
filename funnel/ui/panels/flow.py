@@ -98,9 +98,12 @@ def _outcome_guidance(status: str, *, auto_build: bool, key_name: str) -> str:
         )
         return f"[b]Some research was unavailable, but usable items were saved.[/b] Next: {next_step}"
     if status == ResearchRunOutcome.NEEDS_CREDENTIALS.value:
+        hint = config.other_provider_hint()
         return (
             f"[b]Request saved; research credentials are needed.[/b] "
-            f"Next: add {key_name}, then choose Build Map again."
+            f"Next: set {key_name} in .env at the repo root (copy .env.example "
+            f"if you have no .env), then choose Build Map again."
+            + (f" {hint}" if hint else "")
         )
     if status == ResearchRunOutcome.NO_CREDIBLE_RESULTS.value:
         return (
@@ -215,6 +218,14 @@ def _coverage_summary(run: ResearchRun, proposals: list[Proposal]) -> str:
         )
 
     uncertainties: list[str] = []
+    unverified = [p for p in usable if p.entity_type == "evidence"
+                  and p.payload.get("provenance") == "model_knowledge"]
+    if unverified:
+        uncertainties.append(
+            f"{_plural(len(unverified), 'evidence item')} "
+            f"{'is' if len(unverified) == 1 else 'are'} model-recalled "
+            f"(no source was fetched; links unverified)"
+        )
     if not evidence:
         uncertainties.append("the run saved no source-backed evidence")
     missing_evidence_links = len(evidence) - len(sourced_evidence)
@@ -435,9 +446,10 @@ class FlowPanel(Vertical):
             f"{provider} · model [b]{resolve_model(tier)}[/b]",
         ]
         if not have_llm:
+            hint = config.other_provider_hint()
             bits.append(
-                f"[red]credentials missing — Build Map will save your request "
-                f"and show what is needed[/red]")
+                f"[red]set {key_name} in .env to enable research[/red]"
+                + (f" [yellow]{hint}[/yellow]" if hint else ""))
         elif not have_tavily:
             bits.append(f"[yellow]no Tavily — {fallback} will be used[/yellow]")
         self.query_one("#flow-keys", Static).update("  ".join(bits))

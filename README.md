@@ -52,7 +52,7 @@ The engine ships as a terminal UI (Textual + SQLModel/SQLite).
 
 ```bash
 uv venv
-uv pip install -e ".[viz,research]"   # viz = charts; research = web automation
+uv pip install -e ".[viz,research,intel]"   # viz = charts; research = web automation; intel = fundamentals
 uv run python -m funnel
 ```
 
@@ -70,7 +70,7 @@ uv run python -m funnel.research.run --topic "Chip manufacturing" --tier profess
 
 `[viz]` adds networkx + matplotlib (charts); `[research]` adds httpx + trafilatura +
 python-dotenv (Phase 6 web automation). Install only `[viz]` if you don't need the
-Research tab.
+Map tab.
 
 The **Tree** tab shows the built map in-app as an interactive tree (layers →
 nodes → companies; `Enter` a company for its dossier, `e` to export). Exports
@@ -78,7 +78,7 @@ nodes → companies; `Enter` a company for its dossier, `e` to export). Exports
 Data is stored outside the repo at `~/.funnel_network_engine/funnel.db`
 (override with the `FUNNEL_HOME` environment variable).
 
-The Research tab needs API keys in a `.env` file at the repo root (never committed).
+Automated research needs API keys in a `.env` file at the repo root (never committed).
 This repo uses **NVIDIA** as its LLM provider (get a key at build.nvidia.com):
 
 ```
@@ -152,7 +152,7 @@ Implemented (terminal UI):
   pipeline does open-web OSINT (topic-planned search queries + scraper, native
   Claude web-search fallback) and
   **proposes** the graph. Proposals are staged for review (accept/reject) in the
-  Research tab, then committed into the graph. Three tiers (High-level /
+  Map tab, then committed into the graph. Three tiers (High-level /
   Professional / Deep Research) govern both research depth and the **tree chart**
   resolution. Headless runner: `python -m funnel.research.run --request <id> --tier professional`.
 - **Map flow redesign** — the golden path collapsed to one topic bar + two

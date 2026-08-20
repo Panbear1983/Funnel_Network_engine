@@ -96,6 +96,28 @@ def run() -> None:
         assert repo.count_for_request(ProcessNode, rid) == 0, (
             "failure handling bypassed proposal staging", label)
 
+    # Stage-2 (process stack) failure must DEGRADE, not FAIL the whole run:
+    # no nodes -> no_credible_results, request saved, skip line logged.
+    rid = request("stack failure")
+    stack_failed = run_pipeline(
+        rid, "professional", llm=fail_stage("process stack"),
+        gather=fake_gather, online_fallback=False)
+    assert stack_failed.status == ResearchRunOutcome.NO_CREDIBLE_RESULTS.value, (
+        stack_failed.status, stack_failed.summary)
+    assert any("process stack discovery" in line for line in stack_failed.log), (
+        stack_failed.log)
+
+    # Startup reaper: an orphaned status="running" row is marked failed.
+    from funnel.db.models import ResearchRun
+    orphan = repo.add(ResearchRun(request_id=rid, tier="professional",
+                                  model="m", status="running"))
+    reaped = repo.reap_running_runs()
+    assert reaped == 1, reaped
+    orphan2 = repo.get(ResearchRun, orphan.id)
+    assert orphan2.status == ResearchRunOutcome.FAILED.value
+    assert "interrupted" in orphan2.summary and orphan2.finished_at is not None
+    assert repo.reap_running_runs() == 0        # idempotent
+
     rid = request("gather")
 
     def failed_gather(query: str, count: int):
@@ -157,15 +179,25 @@ def run() -> None:
         gather=fake_gather, online_fallback=False)
     assert empty.status == ResearchRunOutcome.NO_CREDIBLE_RESULTS.value, empty.summary
 
-    failed = run_pipeline(
-        request("failed"), "professional",
+    # A stage-2 (process stack) failure now DEGRADES (guarded since Phase 1);
+    # true FAILED needs a catastrophic error outside the stage guards — e.g.
+    # a request id that does not exist (brief building crashes, no proposals).
+    stack_degraded = run_pipeline(
+        request("stack degraded"), "professional",
         llm=fail_stage("Decompose this into the value-chain process stack"),
         gather=fake_gather, online_fallback=False)
+    assert stack_degraded.status == ResearchRunOutcome.NO_CREDIBLE_RESULTS.value, (
+        stack_degraded.summary)
+
+    failed = run_pipeline(
+        "request_does_not_exist", "professional",
+        llm=fake_llm, gather=fake_gather, online_fallback=False)
     assert failed.status == ResearchRunOutcome.FAILED.value, failed.summary
 
     print(
         "OUTCOMES_OK complete, partial stage/source/brief failures, "
-        "needs_credentials, no_credible_results, failed"
+        "needs_credentials, no_credible_results (incl. degraded stage-2), "
+        "failed, reaper"
     )
 
 

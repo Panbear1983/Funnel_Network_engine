@@ -99,3 +99,22 @@ def llm_key_name() -> str:
 def llm_api_key() -> str:
     """The API key for the active provider (for preflight checks)."""
     return os.environ.get(llm_key_name(), "")
+
+
+def available_providers() -> list[str]:
+    """Providers whose API key is actually set — used only for GUIDANCE (the
+    active provider is never switched silently; FUNNEL_LLM_PROVIDER decides)."""
+    return [p for p, env in _PROVIDER_KEY_ENV.items() if os.environ.get(env, "")]
+
+
+def other_provider_hint() -> str:
+    """One-line hint when the active provider's key is missing but another
+    provider's key exists. Empty string otherwise."""
+    if llm_api_key():
+        return ""
+    others = [p for p in available_providers() if p != llm_provider()]
+    if not others:
+        return ""
+    p = others[0]
+    return (f"(a {_PROVIDER_KEY_ENV[p]} is present — set FUNNEL_LLM_PROVIDER={p} "
+            f"in .env to use it)")

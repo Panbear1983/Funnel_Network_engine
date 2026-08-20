@@ -23,12 +23,13 @@ stack, discovers the companies active at each stage, infers supplier/customer
 relationships, collects supporting evidence, and renders the result as funnel and
 tree charts.
 
-Research is automated by **Claude** (Anthropic's native API) plus open-web
+Research is automated by your configured LLM provider (**NVIDIA** by
+default; Anthropic or OpenRouter optional) plus open-web
 scraping, but nothing enters your graph without review: every finding is staged
 as a *proposal* that you can reject before it is committed.
 
 The golden path is **one text field and two buttons**: type a topic in the
-**Map** tab, press **Generate**, reject anything wrong, press **Build** — the
+**Map** tab, press **Build Map**, reject anything wrong, press **Finish Reviewed Map** — the
 tree chart is exported at all three detail levels automatically.
 
 ---
@@ -39,7 +40,7 @@ tree chart is exported at all three detail levels automatically.
 
 ```bash
 cd Funnel_Network_engine
-uv venv && uv pip install -e ".[viz,research]"
+uv venv && uv pip install -e ".[viz,research,intel]"
 ```
 
 ### API keys
@@ -280,8 +281,9 @@ those providers) — add the active provider's key to `.env` at the repo root, o
 export it in your shell before launching.
 
 **Research runs but finds no companies** — check `TAVILY_API_KEY`; without it
-scraping returns nothing and the pipeline relies entirely on Claude's web-search
-fallback, which is slower.
+scraping returns nothing. Anthropic/OpenRouter fall back to the model's own web
+search (slower); NVIDIA has no fallback, so evidence becomes model-recalled and
+is marked unverified (`~` in the Evidence pane).
 
 **"Claude declined this request (stop_reason=refusal)"** — the topic tripped a
 safety classifier. Rephrase the intake brief and retry.
@@ -289,4 +291,4 @@ safety classifier. Rephrase the intake brief and retry.
 **Charts fail to export** — install the viz extra: `uv pip install -e ".[viz]"`.
 
 **The app won't start after moving the repo** — the virtualenv hardcodes paths;
-recreate it: `rm -rf .venv && uv venv && uv pip install -e ".[viz,research]"`.
+recreate it: `rm -rf .venv && uv venv && uv pip install -e ".[viz,research,intel]"`.

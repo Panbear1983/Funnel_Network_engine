@@ -71,6 +71,11 @@ class FunnelApp(App):
 
     def on_mount(self) -> None:
         init_db()
+        reaped = repo.reap_running_runs()
+        if reaped:
+            self.notify(f"{reaped} interrupted run(s) from a previous session "
+                        "were marked failed; staged items remain reviewable.",
+                        severity="warning")
         self._initialized = True
         self.query_one(Sidebar).reload()
 

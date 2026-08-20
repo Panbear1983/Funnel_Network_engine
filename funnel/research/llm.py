@@ -9,6 +9,16 @@ from typing import Callable
 
 from funnel import config
 
+# Which providers can fall back to their own web search when scraping is
+# unavailable. NVIDIA's endpoint has none: `online=True` is accepted-and-ignored.
+PROVIDER_WEB_SEARCH = {"nvidia": False, "openrouter": True, "anthropic": True}
+
+
+def provider_web_capable() -> bool:
+    """True when the active provider can search the web itself (so thin-scrape
+    evidence is still source-backed rather than model-recalled)."""
+    return PROVIDER_WEB_SEARCH.get(config.llm_provider(), False)
+
 
 def make_llm(model: str) -> Callable[..., dict]:
     provider = config.llm_provider()

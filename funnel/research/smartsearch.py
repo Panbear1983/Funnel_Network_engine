@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 from typing import Callable
 
 from funnel.research import prompts
-from funnel.research.ingest import slugify
+from funnel.research.ingest import entity_slug, slugify
 
 Gather = Callable[[str, int], tuple]
 
@@ -69,7 +69,7 @@ def parse_plans(data: dict, max_queries: int) -> dict[str, list[PlannedQuery]]:
     strings (legacy shape) or {"q", "intent"} objects."""
     plans: dict[str, list[PlannedQuery]] = {}
     for plan in data.get("plans", []):
-        ref = slugify(plan.get("node", ""))
+        ref = entity_slug(plan.get("node", ""))
         queries: list[PlannedQuery] = []
         for entry in plan.get("queries", []):
             if isinstance(entry, str) and entry.strip():

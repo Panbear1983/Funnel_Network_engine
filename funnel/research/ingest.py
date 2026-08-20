@@ -10,6 +10,7 @@ confidence; manual edits are never blanked.
 
 from __future__ import annotations
 
+import hashlib
 import re
 
 from funnel.db import repo
@@ -30,6 +31,22 @@ _EVIDENCE_RANK = {"unknown": 0, "inferred": 1, "weak": 2, "confirmed": 3}
 def slugify(text: str) -> str:
     text = (text or "").strip().lower()
     return re.sub(r"[^a-z0-9]+", "_", text).strip("_") or "x"
+
+
+_ASCII_ALNUM = re.compile(r"[a-zA-Z0-9]")
+
+
+def entity_slug(name: str) -> str:
+    """Merge/ref key for entity names and claims. Identical to slugify() for
+    any name containing ASCII — but a pure-non-ASCII name (e.g. CJK 台積電)
+    would collapse to the degenerate "x" and silently merge DISTINCT entities,
+    so those get a stable content-hash suffix instead. Deterministic, so
+    idempotent re-run merging still works."""
+    text = (name or "").strip()
+    slug = slugify(text)
+    if slug == "x" and text and not _ASCII_ALNUM.search(text):
+        return "x_" + hashlib.sha1(text.encode("utf-8")).hexdigest()[:8]
+    return slug
 
 
 def _fill(entity, field: str, value) -> bool:
@@ -56,11 +73,11 @@ def commit_proposals(request_id: str, run_id: str | None = None) -> dict:
         by_type.setdefault(p.entity_type, []).append(p)
 
     # Existing graph, keyed the same way proposals are ref-keyed.
-    existing_nodes = {slugify(n.name): n for n in repo.list_for_request(ProcessNode, request_id)}
-    existing_companies = {slugify(c.name): c for c in repo.list_for_request(CompanyNode, request_id)}
+    existing_nodes = {entity_slug(n.name): n for n in repo.list_for_request(ProcessNode, request_id)}
+    existing_companies = {entity_slug(c.name): c for c in repo.list_for_request(CompanyNode, request_id)}
     existing_edges = {(e.from_company, e.to_company, e.relationship_type): e
                       for e in repo.list_for_request(RelationshipEdge, request_id)}
-    existing_evidence = {slugify(e.claim)[:40]: e
+    existing_evidence = {entity_slug(e.claim)[:40]: e
                          for e in repo.list_for_request(EvidenceItem, request_id)}
     existing_deals = {(d.buyer, d.supplier, d.deal_type): d
                       for d in repo.list_for_request(Deal, request_id)}
@@ -146,7 +163,7 @@ def commit_proposals(request_id: str, run_id: str | None = None) -> dict:
     for p in by_type.get("evidence", []):
         d = p.payload
         related = [company_map[k] for k in d.get("related_companies", []) if k in company_map]
-        ev = existing_evidence.get(slugify(d.get("claim", ""))[:40])
+        ev = existing_evidence.get(entity_slug(d.get("claim", ""))[:40])
         if ev is not None:
             merged_rel = list(ev.related_companies or [])
             merged_rel.extend(cid for cid in related if cid not in merged_rel)
@@ -163,9 +180,10 @@ def commit_proposals(request_id: str, run_id: str | None = None) -> dict:
                 date=d.get("date", ""), claim=d.get("claim", ""),
                 extracted_quote=d.get("quote", ""), related_companies=related,
                 evidence_strength=d.get("evidence_strength", "moderate"),
+                provenance=d.get("provenance", ""),
                 confidence_score=d.get("confidence_score", 0.0),
             ))
-            existing_evidence[slugify(ev.claim)[:40]] = ev
+            existing_evidence[entity_slug(ev.claim)[:40]] = ev
             counts["evidence"] += 1
         repo.set_proposal_status(p.id, "committed")
 

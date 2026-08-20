@@ -16,7 +16,9 @@ Notes vs the other providers:
 
 from __future__ import annotations
 
+import random
 import re
+import time
 from typing import Callable
 
 from funnel import config
@@ -24,6 +26,17 @@ from funnel.research.claude import _parse_json
 
 _ENDPOINT = "https://integrate.api.nvidia.com/v1/chat/completions"
 _THINK_RE = re.compile(r"<think>.*?</think>", re.S)
+
+# Injectable for tests (smokes no-op it) — exponential backoff with jitter.
+_sleep = time.sleep
+
+# Models observed to reject response_format json mode (support is per-model on
+# NVIDIA's OpenAI-compat endpoint); learned at runtime, skipped thereafter.
+_NO_JSON_MODE: set[str] = set()
+
+
+def _backoff(attempt: int) -> None:
+    _sleep(min(8.0, 1.0 * (2 ** attempt)) * (0.5 + random.random()))
 
 
 class NvidiaError(Exception):
@@ -57,35 +70,70 @@ def chat_json(
         "max_tokens": 16000,  # explicit: default caps can truncate large JSON
         "stream": False,
     }
+    if model not in _NO_JSON_MODE:
+        # Ask for strict JSON where the model supports it; learned-fallback
+        # below strips it for models that 400 on the field.
+        payload["response_format"] = {"type": "json_object"}
     headers = {"Authorization": f"Bearer {key}", "Accept": "application/json"}
 
     last_error: Exception | None = None
-    for _ in range(max_retries + 1):
+    attempt = 0
+    while attempt <= max_retries:
         try:
             response = httpx.post(_ENDPOINT, json=payload, headers=headers,
                                   timeout=timeout)
+            if response.status_code in (401, 403):
+                # Bad key: never retry — and word it so the pipeline
+                # classifies it as a credentials problem, not a failure.
+                raise NvidiaError(
+                    f"NVIDIA API key rejected ({response.status_code} "
+                    f"Unauthorized) — check NVIDIA_API_KEY in .env.")
+            body_lower = response.text.lower() if response.status_code in (400, 422) else ""
+            if ("response_format" in payload
+                    and response.status_code in (400, 422)
+                    and ("response_format" in body_lower or "json" in body_lower)):
+                # This model rejects json mode — strip it, remember, retry
+                # immediately (does not consume a backoff attempt).
+                _NO_JSON_MODE.add(model)
+                payload.pop("response_format", None)
+                continue
             if response.status_code == 429:
                 last_error = NvidiaError("NVIDIA API rate-limited (429).")
+                attempt += 1
+                if attempt <= max_retries:
+                    _backoff(attempt)
                 continue
             response.raise_for_status()
             data = response.json()
-            break
+            # Parse INSIDE the retry loop: a truncated/chatty generation is
+            # retryable (re-request), not fatal.
+            choices = data.get("choices") or []
+            if not choices:
+                raise NvidiaError(f"NVIDIA returned no choices: {str(data)[:200]}")
+            content = (choices[0].get("message") or {}).get("content") or ""
+            content = _THINK_RE.sub("", content)  # drop reasoning traces
+            try:
+                return _parse_json(content)
+            except Exception as exc:
+                last_error = NvidiaError(
+                    f"Non-JSON output from {model}: {content[:200]!r}")
+                attempt += 1
+                if attempt <= max_retries:
+                    _backoff(attempt)
+                continue
+        except NvidiaError:
+            raise  # 401/no-choices: deliberate, not retryable here
         except httpx.HTTPError as exc:
             last_error = exc
+            attempt += 1
+            if attempt <= max_retries:
+                _backoff(attempt)
         except ValueError as exc:  # non-JSON body (gateway blip) — retryable
             last_error = NvidiaError(f"NVIDIA returned a non-JSON body: {exc}")
-    else:
-        raise NvidiaError(f"NVIDIA request failed: {last_error}") from last_error
-
-    choices = data.get("choices") or []
-    if not choices:
-        raise NvidiaError(f"NVIDIA returned no choices: {str(data)[:200]}")
-    content = (choices[0].get("message") or {}).get("content") or ""
-    content = _THINK_RE.sub("", content)  # drop reasoning traces before parsing
-    try:
-        return _parse_json(content)
-    except Exception as exc:
-        raise NvidiaError(f"Non-JSON output from {model}: {content[:200]!r}") from exc
+            attempt += 1
+            if attempt <= max_retries:
+                _backoff(attempt)
+    raise NvidiaError(f"NVIDIA request failed: {last_error}") from last_error
 
 
 def make_llm(model: str, *, api_key: str | None = None) -> Callable[..., dict]:

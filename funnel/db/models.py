@@ -105,6 +105,10 @@ class EvidenceItem(SQLModel, table=True):
     related_process_nodes: list[str] = Field(default_factory=list, sa_type=JSON)
     evidence_strength: str = "moderate"
     extracted_quote: str = ""
+    # Where the claim came from: scraped | model_knowledge | isr | "" (manual).
+    # model_knowledge = the LLM recalled it without fetching any source; its
+    # URL was never verified and may be misremembered.
+    provenance: str = ""
     confidence_score: float = 0.0
 
 

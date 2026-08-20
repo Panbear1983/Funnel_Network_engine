@@ -25,9 +25,10 @@ _CALLS: list[dict] = []
 
 
 class _Resp:
-    def __init__(self, status: int, body):
+    def __init__(self, status: int, body, text: str = ""):
         self.status_code = status
         self._body = body
+        self.text = text
 
     def raise_for_status(self):
         if self.status_code >= 400 and self.status_code != 429:
@@ -37,6 +38,11 @@ class _Resp:
         if self._body is None:
             raise ValueError("no body")
         return self._body
+
+
+# Backoff must never really sleep in a smoke; record the delays instead.
+_SLEEPS: list[float] = []
+nvidia._sleep = _SLEEPS.append
 
 
 def _install(sequence):
@@ -74,9 +80,44 @@ def run() -> None:
     assert nvidia.chat_json([{"role": "user", "content": "x"}], "m", online=True) == {"a": 1}
     assert _CALLS[-1]["json"]["model"] == "m", "online must not mangle the model id"
 
-    # --- 429 then success (retry) -----------------------------------------
+    # --- 429 then success (retry, with backoff between attempts) -----------
+    _SLEEPS.clear()
     _install([_Resp(429, None), _msg('{"r": 1}')])
     assert nvidia.chat_json([{"role": "user", "content": "x"}], "m") == {"r": 1}
+    assert len(_SLEEPS) == 1 and _SLEEPS[0] > 0, _SLEEPS
+
+    # --- non-JSON generation retried (parse inside the loop) ---------------
+    _SLEEPS.clear()
+    _install([_msg("sorry, here is prose with no braces"),
+              _msg('{"fixed": true}')])
+    assert nvidia.chat_json([{"role": "user", "content": "x"}], "m") == {"fixed": True}
+    assert len(_SLEEPS) == 1, _SLEEPS
+
+    # --- 401 fails fast (exactly one HTTP call) and reads as credentials ---
+    from funnel.research.pipeline import _is_credentials_error
+    _CALLS.clear()
+    _install([_Resp(401, None, text="Unauthorized")])
+    try:
+        nvidia.chat_json([{"role": "user", "content": "x"}], "m")
+        raise AssertionError("expected NvidiaError for 401")
+    except nvidia.NvidiaError as exc:
+        assert len(_CALLS) == 1, "401 must not be retried"
+        assert _is_credentials_error(exc), exc
+
+    # --- response_format json mode: sent, and dropped on a 400 rejection ---
+    nvidia._NO_JSON_MODE.clear()
+    _install([_msg('{"j": 1}')])
+    nvidia.chat_json([{"role": "user", "content": "x"}], "json-capable-model")
+    assert _CALLS[-1]["json"].get("response_format") == {"type": "json_object"}
+    _install([_Resp(400, None, text='{"error": "response_format is not supported"}'),
+              _msg('{"j": 2}')])
+    assert nvidia.chat_json([{"role": "user", "content": "x"}], "no-json-model") == {"j": 2}
+    assert "response_format" not in _CALLS[-1]["json"], "json mode not stripped"
+    assert "no-json-model" in nvidia._NO_JSON_MODE
+    _install([_msg('{"j": 3}')])           # learned: never sent again
+    nvidia.chat_json([{"role": "user", "content": "x"}], "no-json-model")
+    assert "response_format" not in _CALLS[-1]["json"]
+    nvidia._NO_JSON_MODE.clear()
 
     # --- missing key raises a clear error ---------------------------------
     os.environ["NVIDIA_API_KEY"] = ""
