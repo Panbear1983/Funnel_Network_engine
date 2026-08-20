@@ -135,8 +135,8 @@ def run() -> None:
 
     # --- per-tier model resolution ----------------------------------------
     assert resolve_model(get_tier("high_level")) == "meta/llama-3.1-8b-instruct"
-    assert resolve_model(get_tier("professional")) == "meta/llama-3.3-70b-instruct"
-    assert resolve_model(get_tier("deep_research")) == "meta/llama-3.1-405b-instruct"
+    assert resolve_model(get_tier("professional")) == "meta/llama-3.1-70b-instruct"
+    assert resolve_model(get_tier("deep_research")) == "meta/llama-3.1-70b-instruct"
     # tier override wins
     os.environ["NVIDIA_MODEL_PRO"] = "nvidia/llama-3.3-nemotron-super-49b-v1"
     assert resolve_model(get_tier("professional")) == "nvidia/llama-3.3-nemotron-super-49b-v1"

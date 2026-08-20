@@ -65,9 +65,14 @@ _ALT_DEFAULTS = {
     "openrouter": {"high_level": "deepseek/deepseek-chat",
                    "professional": "deepseek/deepseek-chat",
                    "deep_research": "deepseek/deepseek-chat"},
+    # Live-verified against integrate.api.nvidia.com on this account tier
+    # (2026-08): llama-3.3-70b's endpoint consistently drops connections and
+    # llama-3.1-405b/nemotron ids 404, so both larger tiers ride the verified
+    # 3.1-70b. Override per tier via NVIDIA_MODEL_DEEP etc. if your account
+    # unlocks bigger models.
     "nvidia": {"high_level": "meta/llama-3.1-8b-instruct",
-               "professional": "meta/llama-3.3-70b-instruct",
-               "deep_research": "meta/llama-3.1-405b-instruct"},
+               "professional": "meta/llama-3.1-70b-instruct",
+               "deep_research": "meta/llama-3.1-70b-instruct"},
 }
 
 

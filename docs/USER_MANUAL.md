@@ -176,8 +176,8 @@ uses **NVIDIA** as its provider; defaults are Llama-3.x instruct models:
 | Tier | Model (NVIDIA default) | Layers | Companies/node | Evidence | Deals |
 |---|---|---|---|---|---|
 | High-level | `meta/llama-3.1-8b-instruct` | 4 | 3 | — | — |
-| Professional | `meta/llama-3.3-70b-instruct` | 6 | 6 | ✓ | — |
-| Deep Research | `meta/llama-3.1-405b-instruct` | 9 | 8 | ✓ | ✓ |
+| Professional | `meta/llama-3.1-70b-instruct` | 6 | 6 | ✓ | — |
+| Deep Research | `meta/llama-3.1-70b-instruct` | 9 | 8 | ✓ | ✓ |
 
 Override models in `.env` with `NVIDIA_MODEL_HIGH`, `NVIDIA_MODEL_PRO`,
 `NVIDIA_MODEL_DEEP`, or set `NVIDIA_MODEL` to force one model everywhere. Any

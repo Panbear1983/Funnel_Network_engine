@@ -85,10 +85,10 @@ This repo uses **NVIDIA** as its LLM provider (get a key at build.nvidia.com):
 FUNNEL_LLM_PROVIDER=nvidia
 NVIDIA_API_KEY=nvapi-...
 TAVILY_API_KEY=tvly-...        # recommended: NVIDIA has no built-in web search
-# optional per-tier model overrides (Llama-3.x instruct defaults):
+# optional per-tier model overrides (defaults are live-verified Llama-3.1):
 NVIDIA_MODEL_HIGH=meta/llama-3.1-8b-instruct
-NVIDIA_MODEL_PRO=meta/llama-3.3-70b-instruct
-NVIDIA_MODEL_DEEP=meta/llama-3.1-405b-instruct
+NVIDIA_MODEL_PRO=meta/llama-3.1-70b-instruct
+NVIDIA_MODEL_DEEP=meta/llama-3.1-70b-instruct
 ```
 
 Other providers still work: set `FUNNEL_LLM_PROVIDER=anthropic` (+ `ANTHROPIC_API_KEY`)
