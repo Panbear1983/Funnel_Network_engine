@@ -16,8 +16,8 @@ from textual.containers import Horizontal, Vertical
 from textual.widgets import Button, Static, Tree
 
 from funnel import config
-from funnel.export.chart import LAYER_LABEL, _short
-from funnel.export.chart_tree import _companies_for_node, _layers_present
+from funnel.export.chart import LAYER_LABEL, short_label
+from funnel.export.chart_tree import companies_for_node, layers_present
 from funnel.export.openers import open_chart
 from funnel.graph.assembly import build_graph
 from funnel.ui.panels.dossier import DossierScreen, resolve_dossier
@@ -60,14 +60,14 @@ class TreeViewPanel(JobRunnerMixin, Vertical):
         rel = model.relevance.get(c.id, 0.0)
         tick = f" ({c.ticker})" if c.ticker else ""
         grounded = " ★" if (c.financials or {}).get("isr") else ""
-        return f"{_short(c.name, 30)}{tick}  rel {rel:.2f}{grounded}"
+        return f"{short_label(c.name, 30)}{tick}  rel {rel:.2f}{grounded}"
 
     def _node_label(self, model, n) -> str:
         count = model.company_count_by_node.get(n.id, 0)
         bn = model.bottleneck.get(n.id, 0.0)
         bar = "●" * max(0, min(3, round(bn * 3)))
         tail = f"  bottleneck {bar}" if bar else ""
-        return f"{_short(n.name, 32)}  [{count}]{tail}"
+        return f"{short_label(n.name, 32)}  [{count}]{tail}"
 
     def _rebuild(self) -> None:
         tree = self.query_one("#map-tree", Tree)
@@ -87,17 +87,17 @@ class TreeViewPanel(JobRunnerMixin, Vertical):
         title = (model.request.target_output
                  or model.request.industry_of_interest
                  or model.request.title or "Value chain")
-        tree.root.label = _short(title, 44)
+        tree.root.label = short_label(title, 44)
         node_ids = {n.id for n in model.nodes}
 
-        for layer in _layers_present(model):
+        for layer in layers_present(model):
             layer_nodes = [n for n in model.nodes if n.layer == layer]
             branch = tree.root.add(
                 f"{LAYER_LABEL.get(layer, layer)}  ({len(layer_nodes)})",
                 expand=True)
             for n in layer_nodes:
                 node_branch = branch.add(self._node_label(model, n), expand=True)
-                for c in _companies_for_node(model, n.id):
+                for c in companies_for_node(model, n.id):
                     node_branch.add_leaf(self._company_label(model, c),
                                          data=("company", c.id))
 

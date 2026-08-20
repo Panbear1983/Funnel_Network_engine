@@ -211,6 +211,10 @@ async def run() -> None:
             repo.add(proposal)
         fp.load_request(r.id)
         await pilot.pause()
+        wrap = fp.query_one("#flow-coverage-wrap", Collapsible)
+        assert wrap.display, "coverage collapsible should appear after a run"
+        wrap.collapsed = False
+        await pilot.pause()
         coverage = str(fp.query_one("#flow-coverage").render())
         assert "Found: 1 process step, 2 companies, and 1 relationship" in coverage, coverage
         assert "1 of 2 saved evidence items include a source link" in coverage, coverage
@@ -238,7 +242,7 @@ async def run() -> None:
         for progress_line, expected in expected_stages.items():
             assert expected in (_plain_stage(progress_line) or ""), progress_line
             fp._log_line(progress_line)
-            assert expected in str(fp.query_one("#flow-stage").render()), progress_line
+            assert expected in str(fp.query_one("#flow-status").render()), progress_line
         fp._set_busy(False)
         fp._set_active_stage(None)
 
@@ -260,7 +264,7 @@ async def run() -> None:
         fp._start_build = lambda: auto_actions.append("finish")  # type: ignore[method-assign]
         fp._generate_done("offline-run", "complete", "offline UI check")
         assert auto_actions == ["finish"], auto_actions
-        assert "Next:" in str(fp.query_one("#flow-result").render())
+        assert "Next:" in str(fp.query_one("#flow-status").render())
 
         # Partial output is buildable, while credential/no-result states retain
         # the request and explain a recovery path without finalizing proposals.
@@ -268,28 +272,28 @@ async def run() -> None:
             "partial-run", ResearchRunOutcome.PARTIAL.value,
             "partial: process_node 1. Skipped: evidence extraction")
         assert auto_actions == ["finish", "finish"], auto_actions
-        partial_guidance = str(fp.query_one("#flow-result").render())
+        partial_guidance = str(fp.query_one("#flow-status").render())
         assert "usable items were saved" in partial_guidance
         assert "Next:" in partial_guidance
         fp._generate_done(
             "credential-run", ResearchRunOutcome.NEEDS_CREDENTIALS.value,
             "needs credentials: request saved")
         assert auto_actions == ["finish", "finish"], auto_actions
-        credential_guidance = str(fp.query_one("#flow-result").render())
+        credential_guidance = str(fp.query_one("#flow-status").render())
         assert "request saved" in credential_guidance.casefold()
         assert "Next:" in credential_guidance
         fp._generate_done(
             "empty-run", ResearchRunOutcome.NO_CREDIBLE_RESULTS.value,
             "no credible results: request saved")
         assert auto_actions == ["finish", "finish"], auto_actions
-        no_result_guidance = str(fp.query_one("#flow-result").render())
+        no_result_guidance = str(fp.query_one("#flow-status").render())
         assert "No credible map items" in no_result_guidance
         assert "Next:" in no_result_guidance
         fp._generate_done(
             "failed-run", ResearchRunOutcome.FAILED.value,
             "failed: request saved")
         assert auto_actions == ["finish", "finish"], auto_actions
-        failed_guidance = str(fp.query_one("#flow-result").render())
+        failed_guidance = str(fp.query_one("#flow-status").render())
         assert "Research stopped" in failed_guidance
         assert "Next:" in failed_guidance
 

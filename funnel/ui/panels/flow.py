@@ -97,7 +97,7 @@ class ProposalDetailModal(ModalScreen[None]):
         self.dismiss(None)
 
 
-class FlowPanel(JobRunnerMixin, Vertical):
+class FlowPanel(JobRunnerMixin, VerticalScroll):
     BINDINGS = [
         Binding("v", "view_details", "Details"),
         Binding("a", "restore_all", "Restore all"),
@@ -154,9 +154,15 @@ class FlowPanel(JobRunnerMixin, Vertical):
         with Horizontal(id="flow-dossier-bar", classes="toolbar"):
             yield Static("", id="flow-dossier")
             yield Button("View dossier", id="flow-dossier-btn")
-        yield Static("", id="flow-stage")
+        yield Static("", id="flow-status")
+        yield Static("", id="flow-result")
         yield Log(id="flow-log", classes="research-log")
-        yield Static("", id="flow-coverage")
+        with Collapsible(
+            title="Coverage details",
+            collapsed=True,
+            id="flow-coverage-wrap",
+        ):
+            yield Static("", id="flow-coverage")
         with Collapsible(
             title="Advanced (optional): review map items before finishing",
             collapsed=True,
@@ -177,13 +183,13 @@ class FlowPanel(JobRunnerMixin, Vertical):
             with Horizontal(classes="toolbar"):
                 yield Button("Finish Reviewed Map",
                              id="flow-build", variant="success")
-        yield Static("", id="flow-result")
 
     def on_mount(self) -> None:
         table = self.query_one("#flow-table", DataTable)
         table.cursor_type = "row"
         table.add_columns(" ", "Type", "Name", "Detail", "Conf", "Status")
         self.query_one("#flow-dossier-bar").display = False
+        self.query_one("#flow-coverage-wrap", Collapsible).display = False
         self._populate_isr_seed()
         self._refresh_key_status()
 
@@ -311,15 +317,19 @@ class FlowPanel(JobRunnerMixin, Vertical):
 
     def _render_coverage(self) -> None:
         target = self.query_one("#flow-coverage", Static)
+        wrap = self.query_one("#flow-coverage-wrap", Collapsible)
         if not self.request_id or not self.run_id:
             target.update("")
+            wrap.display = False
             return
         run = repo.get(ResearchRun, self.run_id)
         if run is None:
             target.update("")
+            wrap.display = False
             return
         proposals = repo.list_proposals(self.request_id, run_id=self.run_id)
         target.update(_coverage_summary(run, proposals))
+        wrap.display = True
 
     def _selected_proposal(self):
         table = self.query_one("#flow-table", DataTable)
@@ -458,7 +468,7 @@ class FlowPanel(JobRunnerMixin, Vertical):
         stage = self._active_stage or "Working…"
         cancelling = (" · cancelling…" if self._cancel_event is not None
                       and self._cancel_event.is_set() else "")
-        self.query_one("#flow-stage", Static).update(
+        self.query_one("#flow-status", Static).update(
             f"[b]{stage}[/b] · {clock}"
             + (f" · {calls} LLM calls" if calls else "") + cancelling)
 
@@ -512,7 +522,7 @@ class FlowPanel(JobRunnerMixin, Vertical):
 
     def _set_active_stage(self, stage: Optional[str]) -> None:
         self._active_stage = stage
-        self.query_one("#flow-stage", Static).update(
+        self.query_one("#flow-status", Static).update(
             f"[b]{stage}[/b]" if stage else "")
 
     def _generate_done(self, run_id: str, status: str, summary: str) -> None:
@@ -522,12 +532,14 @@ class FlowPanel(JobRunnerMixin, Vertical):
         self._log_line(f"[{status}] {summary}")
         self._render_proposals()
         self._render_coverage()
+        if self._rows:
+            self.query_one("#flow-table", DataTable).focus()
         auto_build = self.query_one("#auto-build", Switch).value
         key_name = config.llm_key_name()
         guidance = _outcome_guidance(
             status, auto_build=auto_build, key_name=key_name)
         if guidance:
-            self.query_one("#flow-result", Static).update(guidance)
+            self.query_one("#flow-status", Static).update(guidance)
         if status == ResearchRunOutcome.NEEDS_CREDENTIALS.value:
             self.app.notify(
                 f"Research credentials are needed; the request was saved.",

@@ -109,6 +109,15 @@ obvious junk is auto-rejected, everything else commits, and the tree charts
 export and open by themselves. Re-running the same topic merges — nothing
 duplicates. Flip auto-build off to review proposals before they commit.
 
+**While it runs** the status line shows the stage, elapsed time, and LLM call
+count, and **Build Map becomes a Cancel button** — cancelling finishes the
+current call, keeps everything staged so far, and ends the run as *cancelled*
+(reviewable like any other). A **Coverage details** section (collapsed) holds
+the full source/provenance breakdown after each run. Evidence produced without
+any fetched source (no Tavily + a provider without web search) is marked
+*model-recalled* — `~` before its strength in the Evidence pane — and its links
+should be treated as unverified.
+
 Build Map runs everything automatically, with live progress in the log:
 
 1. **Auto-brief** — one Claude call turns your topic into the full research
@@ -240,7 +249,7 @@ Further quality passes, all bounded and deterministic in count:
 | `d` (Map) | ISR dossier of the headline company |
 | `Enter` (Tree tab) | ISR dossier of the selected company |
 | `e` (Tree tab) | Export charts (PNG/PDF/report) |
-| `i` (Advanced → Companies) | ISR dossier of the selected company |
+| `d` (Advanced → Companies) | ISR dossier of the selected company |
 | `Ctrl+F` (company form) | Autofill ticker/exchange/country from ISR |
 | `F2` | Toggle Map ⇄ Advanced |
 | `Ctrl+N` | New research request |

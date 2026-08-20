@@ -274,7 +274,7 @@ class CompanyPanel(CrudPanel):
     form_cls = CompanyForm
     columns = ("Name", "Ticker", "Role", "Country", "Conf", "Nodes", "Evidence")
     entity_name = "company"
-    BINDINGS = [Binding("i", "show_dossier", "Dossier")]
+    BINDINGS = [Binding("d", "show_dossier", "Dossier")]
 
     def extra_buttons(self) -> ComposeResult:
         yield Button("Dossier", id="company-dossier")

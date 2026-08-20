@@ -103,8 +103,8 @@ async def run() -> None:
         await pilot.pause()
         assert cpanel.selected_id() == co.id, cpanel._row_order
 
-        await pilot.press("i")                               # binding -> dossier
-        assert isinstance(app.screen, DossierScreen), ("'i' key", app.screen)
+        await pilot.press("d")                               # binding -> dossier
+        assert isinstance(app.screen, DossierScreen), ("'d' key", app.screen)
         app.pop_screen()
         await pilot.pause()
 

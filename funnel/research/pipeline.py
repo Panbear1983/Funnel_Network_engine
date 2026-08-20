@@ -349,7 +349,9 @@ def _stage_companies(ctx: StageCtx) -> None:
             if not cref:
                 continue
             ctx.company_names[cref] = c.get("name", "")
-            conf = _f(c.get("confidence"), 0.5)
+            # Model-guessed confidence caps at 0.9 so re-run max() merging can
+            # never ratchet an unverified guess to certainty.
+            conf = min(0.9, _f(c.get("confidence"), 0.5))
             if cref in ctx.companies_acc:
                 payload = ctx.companies_acc[cref]["payload"]
                 if ref not in payload["process_node_ids"]:
@@ -429,7 +431,7 @@ def _stage_relationships(ctx: StageCtx) -> None:
         fref, tref = entity_slug(e.get("from", "")), entity_slug(e.get("to", ""))
         if fref not in ctx.company_names or tref not in ctx.company_names or fref == tref:
             continue
-        conf = _f(e.get("confidence"), 0.4)
+        conf = min(0.9, _f(e.get("confidence"), 0.4))
         level = e.get("evidence_level", "inferred")
         ctx.add_proposal("edge", f"{fref}->{tref}", {
             "from_company": fref, "to_company": tref,

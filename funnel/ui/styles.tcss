@@ -207,7 +207,7 @@ ModalScreen {
     padding: 0 0 1 0;
 }
 
-#flow-stage {
+#flow-status {
     height: auto;
     color: $accent;
 }
@@ -235,41 +235,11 @@ ModalScreen {
     color: $text-muted;
 }
 
-#flow-feedback {
-    display: none;
+/* Inside the scrollable Map panel the review table gets a bounded natural
+   height (1fr would fight the scroll container). */
+#flow-table {
     height: auto;
-    margin-top: 1;
-    padding: 1;
-    border: round $panel;
-}
-
-.flow-feedback-hint {
-    height: auto;
-    color: $text-muted;
-    padding-bottom: 1;
-}
-
-.flow-feedback-fields {
-    height: auto;
-}
-
-#flow-feedback-useful {
-    width: 26;
-    margin-right: 1;
-}
-
-#flow-feedback-note {
-    width: 1fr;
-}
-
-.flow-feedback-actions {
-    align-horizontal: right;
-    height: auto;
-    padding-top: 1;
-}
-
-.flow-feedback-actions Button {
-    margin-left: 1;
+    max-height: 20;
 }
 
 .empty-hint {

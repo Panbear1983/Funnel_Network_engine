@@ -9,7 +9,9 @@ from datetime import datetime
 from funnel.sources import evidence_quality
 
 RISK_SCORE = {"unknown": 0.3, "low": 0.2, "medium": 0.6, "high": 1.0}
-EVIDENCE_LEVEL_SCORE = {"unknown": 0.0, "inferred": 0.33, "weak": 0.5, "confirmed": 1.0}
+# "weak" scores BELOW "inferred": weak is what a contradiction downgrade
+# produces, and a contradicted edge must not outrank a plain inferred one.
+EVIDENCE_LEVEL_SCORE = {"unknown": 0.0, "weak": 0.25, "inferred": 0.33, "confirmed": 1.0}
 
 _YEAR_RE = re.compile(r"\b(19|20)\d{2}\b")
 
@@ -56,8 +58,10 @@ def company_investment_relevance(company, node_bottleneck: dict, evidence_items,
                                  *, allow_old: bool = False) -> float:
     """Blend of conviction, economics, bottleneck exposure, evidence and connectivity."""
     conf = company.confidence_score or 0.0
-    rev = company.revenue_purity_estimate if company.revenue_purity_estimate is not None else 0.0
-    share = company.market_share_estimate if company.market_share_estimate is not None else 0.0
+    # Un-estimated purity/share default to NEUTRAL 0.5 — 30% of the score must
+    # not structurally punish companies the LLM never got around to estimating.
+    rev = company.revenue_purity_estimate if company.revenue_purity_estimate is not None else 0.5
+    share = company.market_share_estimate if company.market_share_estimate is not None else 0.5
     bottleneck_exposure = max(
         (node_bottleneck.get(nid, 0.0) for nid in company.process_node_ids), default=0.0
     )

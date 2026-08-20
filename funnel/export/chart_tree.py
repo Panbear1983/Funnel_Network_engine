@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
-from funnel.export.chart import LAYER_LABEL, LAYER_ORDER, _color, _short, company_label
+from funnel.export.chart import LAYER_LABEL, LAYER_ORDER, _color, company_label, short_label
 
 
 @dataclass
@@ -21,13 +21,13 @@ class _T:
     y: float = 0.0
 
 
-def _layers_present(model) -> list[str]:
+def layers_present(model) -> list[str]:
     present = [l for l in LAYER_ORDER if any(n.layer == l for n in model.nodes)]
     extras = sorted({n.layer for n in model.nodes if n.layer not in LAYER_ORDER})
     return present + extras
 
 
-def _companies_for_node(model, node_id: str) -> list:
+def companies_for_node(model, node_id: str) -> list:
     members = [c for c in model.companies if node_id in c.process_node_ids]
     members.sort(key=lambda c: model.relevance.get(c.id, 0.0), reverse=True)
     return members
@@ -45,16 +45,16 @@ def _company_leaf(model, c, resolution: str, color: str) -> _T:
 
 def build_tree(model, resolution: str) -> _T:
     title = model.request.target_output or model.request.industry_of_interest or "Value chain"
-    root = _T(label=_short(title, 28), kind="root", color="#37474f")
+    root = _T(label=short_label(title, 28), kind="root", color="#37474f")
     node_ids = {n.id for n in model.nodes}
 
-    for layer in _layers_present(model):
+    for layer in layers_present(model):
         layer_t = _T(label=LAYER_LABEL.get(layer, layer), kind="layer", color=_color(layer))
         root.children.append(layer_t)
         if resolution == "high":
             seen, top = set(), []
             for n in (x for x in model.nodes if x.layer == layer):
-                for c in _companies_for_node(model, n.id):
+                for c in companies_for_node(model, n.id):
                     if c.id not in seen:
                         seen.add(c.id)
                         top.append(c)
@@ -62,12 +62,12 @@ def build_tree(model, resolution: str) -> _T:
                 layer_t.children.append(_company_leaf(model, c, resolution, _color(layer)))
         else:
             for n in (x for x in model.nodes if x.layer == layer):
-                label = _short(n.name, 22)
+                label = short_label(n.name, 22)
                 if resolution == "deep":
                     label = f"{label}  bn{model.bottleneck.get(n.id, 0.0):.2f}"
                 node_t = _T(label=label, kind="node", color=_color(layer))
                 layer_t.children.append(node_t)
-                for c in _companies_for_node(model, n.id):
+                for c in companies_for_node(model, n.id):
                     node_t.children.append(_company_leaf(model, c, resolution, _color(layer)))
 
     unassigned = [c for c in model.companies
@@ -143,3 +143,8 @@ def render_tree(model, path: Path, fmt: Optional[str] = None, resolution: str = 
     ax.axis("off")
     fig.savefig(str(path), format=fmt, bbox_inches="tight", dpi=150)
     return path
+
+
+# Back-compat aliases (public names above).
+_layers_present = layers_present
+_companies_for_node = companies_for_node

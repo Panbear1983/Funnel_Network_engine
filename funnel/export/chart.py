@@ -40,7 +40,7 @@ def _spread(count: int) -> list[float]:
     return [X_MIN + (X_MAX - X_MIN) * j / (count - 1) for j in range(count)]
 
 
-def _short(text: str, length: int) -> str:
+def short_label(text: str, length: int) -> str:
     text = text or ""
     return text if len(text) <= length else text[: length - 1] + "…"
 
@@ -48,7 +48,7 @@ def _short(text: str, length: int) -> str:
 def company_label(c, limit: int = 18) -> str:
     """Chart leaf label: the company NAME, with the ticker appended only when
     it still fits — raw tickers ('6324.T', '005930.KS') are unreadable."""
-    name = _short(c.name or c.ticker or "?", limit)
+    name = short_label(c.name or c.ticker or "?", limit)
     if c.ticker and len(name) + len(c.ticker) + 3 <= limit + 8:
         return f"{name} ({c.ticker})"
     return name
@@ -97,7 +97,7 @@ def render_funnel(model, path: Path, fmt: Optional[str] = None) -> Path:
             ny = y + 0.30
             ax.scatter([x], [ny], marker="s", s=150, color=_color(layer),
                        edgecolors="white", linewidths=1.0, zorder=3)
-            ax.text(x, ny + 0.13, _short(n.name, 22), ha="center", va="bottom",
+            ax.text(x, ny + 0.13, short_label(n.name, 22), ha="center", va="bottom",
                     fontsize=8, color="#37474f")
 
     # companies within their layer band
@@ -151,3 +151,7 @@ def render_funnel(model, path: Path, fmt: Optional[str] = None) -> Path:
 
     fig.savefig(str(path), format=fmt, bbox_inches="tight", dpi=150)
     return path
+
+
+# Back-compat alias (public name is short_label).
+_short = short_label
