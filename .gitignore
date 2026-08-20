@@ -34,3 +34,6 @@ data/raw/
 data/cache/
 exports/
 
+# Internal planning artifacts
+.hermes/
+
