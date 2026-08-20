@@ -10,7 +10,9 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+import threading
 from collections import Counter
+from datetime import datetime
 from typing import Optional
 from urllib.parse import urlparse
 
@@ -39,6 +41,7 @@ from funnel.intake.questions import (
     RESEARCH_CONTEXT_TEXT,
 )
 from funnel.research import flow as flow_engine
+from funnel.research import llm as llm_factory
 from funnel.research.tiers import TIER_ORDER, TIERS, get_tier, resolve_model
 from funnel.ui.fieldutils import truncate
 from funnel.ui.panels.dossier import (
@@ -114,6 +117,12 @@ def _outcome_guidance(status: str, *, auto_build: bool, key_name: str) -> str:
         return (
             "[b]Research stopped before a usable map was produced; your request is saved.[/b] "
             "Next: choose Build Map to retry, or adjust the topic or optional context first."
+        )
+    if status == ResearchRunOutcome.CANCELLED.value:
+        return (
+            "[b]Run cancelled — items found so far are kept.[/b] "
+            "Next: choose Build Map to start again, or expand Advanced review "
+            "to use what was staged."
         )
     return ""
 
@@ -313,6 +322,11 @@ class FlowPanel(Vertical):
         self._flow_busy = False
         self._dossier_company_id: Optional[str] = None
         self._isr_industry_options: Optional[list] = None
+        self._cancel_event: Optional[threading.Event] = None
+        self._usage = None
+        self._busy_timer = None
+        self._busy_started: Optional[datetime] = None
+        self._active_stage: Optional[str] = None
 
     # --- layout ------------------------------------------------------------
     def compose(self) -> ComposeResult:
@@ -453,7 +467,16 @@ class FlowPanel(Vertical):
         elif not have_tavily:
             bits.append(f"[yellow]no Tavily — {fallback} will be used[/yellow]")
         self.query_one("#flow-keys", Static).update("  ".join(bits))
-        self.query_one("#flow-generate", Button).disabled = self._flow_busy
+        generate = self.query_one("#flow-generate", Button)
+        # Busy + cancellable -> stays usable as the Cancel button (until a
+        # cancel was requested); busy + non-cancellable -> disabled, as before.
+        if self._flow_busy:
+            if self._cancel_event is not None:
+                generate.disabled = self._cancel_event.is_set()
+            else:
+                generate.disabled = True
+        else:
+            generate.disabled = False
 
     def _depth(self) -> str:
         try:
@@ -577,7 +600,10 @@ class FlowPanel(Vertical):
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "flow-generate":
             event.stop()
-            self._start_generate()
+            if self._flow_busy:
+                self._request_cancel()
+            else:
+                self._start_generate()
         elif event.button.id == "flow-build":
             event.stop()
             self._start_build()
@@ -633,7 +659,47 @@ class FlowPanel(Vertical):
     def _set_busy(self, busy: bool) -> None:
         self._flow_busy = busy
         self.query_one("#flow-build", Button).disabled = busy
+        # While a CANCELLABLE run is in flight, Build Map BECOMES the Cancel
+        # button (kept enabled). Non-cancellable busy phases (finalize/build,
+        # ISR seed) keep the plain label and disable it, as before. Other
+        # action buttons are disabled so they can't silently no-op.
+        generate = self.query_one("#flow-generate", Button)
+        if busy and self._cancel_event is not None:
+            generate.label = "Cancel"
+            generate.variant = "warning"
+        else:
+            generate.label = "Build Map"
+            generate.variant = "primary"
+            if not busy:
+                self._cancel_event = None
+        for selector in ("#isr-seed-btn", "#flow-dossier-btn"):
+            try:
+                self.query_one(selector, Button).disabled = busy
+            except Exception:
+                pass
+        if busy:
+            self._busy_started = datetime.now()
+            if self._busy_timer is None:
+                self._busy_timer = self.set_interval(1.0, self._tick_busy)
+            else:
+                self._busy_timer.resume()
+        elif self._busy_timer is not None:
+            self._busy_timer.pause()
         self._refresh_key_status()
+
+    def _tick_busy(self) -> None:
+        """1s heartbeat while a run is in flight: stage + elapsed + LLM calls."""
+        if not self._flow_busy or not self._busy_started:
+            return
+        elapsed = (datetime.now() - self._busy_started).total_seconds()
+        clock = f"{int(elapsed // 60)}m{int(elapsed % 60):02d}s"
+        calls = self._usage.calls if self._usage else 0
+        stage = self._active_stage or "Working…"
+        cancelling = (" · cancelling…" if self._cancel_event is not None
+                      and self._cancel_event.is_set() else "")
+        self.query_one("#flow-stage", Static).update(
+            f"[b]{stage}[/b] · {clock}"
+            + (f" · {calls} LLM calls" if calls else "") + cancelling)
 
     def _start_generate(self) -> None:
         if self._flow_busy:
@@ -652,16 +718,27 @@ class FlowPanel(Vertical):
         self._hide_feedback()
         tier = self._depth()
         log.write_line(f"Building map for '{topic}' ({get_tier(tier).label})…")
+        self._cancel_event = threading.Event()
+        self._usage = llm_factory.UsageTracker()
         self._set_busy(True)
         self._set_active_stage("Stage 1 of 5 — Understanding your topic")
-        self._generate_worker(rid, tier)
+        self._generate_worker(rid, tier, self._cancel_event, self._usage)
+
+    def _request_cancel(self) -> None:
+        if self._cancel_event is None or self._cancel_event.is_set():
+            return
+        self._cancel_event.set()
+        self.query_one("#flow-generate", Button).disabled = True
+        self.app.notify("Cancelling — finishing the current call first…")
 
     @work(thread=True, exclusive=True)
-    def _generate_worker(self, request_id: str, tier_key: str) -> None:
+    def _generate_worker(self, request_id: str, tier_key: str,
+                         cancel, usage) -> None:
         def progress(line: str) -> None:
             self.app.call_from_thread(self._log_line, line)
         try:
-            run = flow_engine.run_research(request_id, tier_key, progress=progress)
+            run = flow_engine.run_research(request_id, tier_key, progress=progress,
+                                           cancel=cancel, usage=usage)
         except Exception as exc:
             self.app.call_from_thread(self._step_failed, f"{type(exc).__name__}: {exc}")
             return
@@ -675,6 +752,7 @@ class FlowPanel(Vertical):
         self.query_one("#flow-log", Log).write_line(f"· {line}")
 
     def _set_active_stage(self, stage: Optional[str]) -> None:
+        self._active_stage = stage
         self.query_one("#flow-stage", Static).update(
             f"[b]{stage}[/b]" if stage else "")
 

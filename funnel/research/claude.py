@@ -41,6 +41,8 @@ def chat_json(
     online: bool = False,
     timeout: float = 120.0,
     max_retries: int = 2,
+    max_tokens: int = 16000,
+    on_usage=None,
 ) -> dict:
     """One Messages API call, parsed as JSON. Set online=True to let Claude use
     its server-side web_search tool when locally scraped context is thin."""
@@ -63,7 +65,7 @@ def chat_json(
     try:
         response = client.messages.create(
             model=model,
-            max_tokens=16000,
+            max_tokens=max_tokens,
             messages=user_messages,
             **kwargs,
         )
@@ -73,6 +75,12 @@ def chat_json(
         raise ClaudeError(f"Claude API error ({exc.status_code}): {exc.message}") from exc
     except anthropic.APIConnectionError as exc:
         raise ClaudeError(f"Network error talking to Claude: {exc}") from exc
+
+    if on_usage is not None:
+        usage = getattr(response, "usage", None)
+        on_usage({"calls": 1,
+                  "prompt_tokens": getattr(usage, "input_tokens", 0) or 0,
+                  "completion_tokens": getattr(usage, "output_tokens", 0) or 0})
 
     if response.stop_reason == "refusal":
         raise ClaudeError("Claude declined this request (stop_reason=refusal).")
@@ -84,11 +92,14 @@ def chat_json(
         raise ClaudeError(f"Claude returned non-JSON output: {text[:200]!r}") from exc
 
 
-def make_llm(model: str, *, api_key: str | None = None) -> Callable[..., dict]:
+def make_llm(model: str, *, api_key: str | None = None,
+             on_usage=None) -> Callable[..., dict]:
     """Bind a model into an `llm(messages, online=False) -> dict` callable, the
     shape the pipeline expects (and that tests replace with a fake)."""
 
-    def llm(messages: list[dict], *, online: bool = False) -> dict:
-        return chat_json(messages, model, api_key=api_key, online=online)
+    def llm(messages: list[dict], *, online: bool = False,
+            max_tokens: int = 16000) -> dict:
+        return chat_json(messages, model, api_key=api_key, online=online,
+                         max_tokens=max_tokens, on_usage=on_usage)
 
     return llm

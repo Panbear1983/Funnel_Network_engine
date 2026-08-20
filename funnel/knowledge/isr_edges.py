@@ -98,7 +98,7 @@ def mine_isr_relationships(
     seen_company_refs = {subj_ref}
     seen_edge_keys: set = set()
 
-    data = llm(prompts.isr_relationships(subject_hit.label, core, clients, competitors))
+    data = llm(prompts.isr_relationships(subject_hit.label, core, clients, competitors), max_tokens=4000)
 
     for e in data.get("edges", []):
         quote = str(e.get("quote") or "").strip()

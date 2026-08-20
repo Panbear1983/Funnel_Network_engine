@@ -151,6 +151,23 @@ def run() -> None:
     _install([_msg('{"dispatch": "ok"}')])
     assert fn([{"role": "user", "content": "x"}]) == {"dispatch": "ok"}
 
+    # --- usage accumulation + per-call max_tokens ---------------------------
+    from funnel.research.llm import UsageTracker
+    tracker = UsageTracker()
+    fn2 = llm_factory.make_llm("m", usage=tracker)
+    _install([
+        _Resp(200, {"choices": [{"message": {"content": '{"u": 1}'}}],
+                    "usage": {"prompt_tokens": 100, "completion_tokens": 20}}),
+        _Resp(200, {"choices": [{"message": {"content": '{"u": 2}'}}],
+                    "usage": {"prompt_tokens": 50, "completion_tokens": 10}}),
+    ])
+    fn2([{"role": "user", "content": "x"}])
+    fn2([{"role": "user", "content": "x"}], max_tokens=2000)
+    assert tracker.calls == 2, tracker
+    assert tracker.prompt_tokens == 150 and tracker.completion_tokens == 30, tracker
+    assert tracker.as_dict()["calls"] == 2
+    assert _CALLS[-1]["json"]["max_tokens"] == 2000, "per-call budget not applied"
+
     # --- openrouter path is untouched -------------------------------------
     os.environ["FUNNEL_LLM_PROVIDER"] = "openrouter"
     assert config.llm_key_name() == "OPENROUTER_API_KEY"

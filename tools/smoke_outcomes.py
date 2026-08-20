@@ -28,7 +28,7 @@ def fake_gather(query: str, count: int) -> tuple[str, list[str]]:
     ]
 
 
-def fake_llm(messages, *, online=False):
+def fake_llm(messages, *, online=False, **_kw):
     text = messages[-1]["content"]
     if "Propose a research brief" in text:
         return {"industry": "Test industry", "target_output": "Test product"}
@@ -64,7 +64,7 @@ def request(title: str) -> str:
 
 
 def fail_stage(marker: str, message: str = "injected failure"):
-    def injected(messages, *, online=False):
+    def injected(messages, *, online=False, **_kw):
         if marker in messages[-1]["content"]:
             raise RuntimeError(message)
         return fake_llm(messages, online=online)
@@ -139,7 +139,7 @@ def run() -> None:
 
     calls = 0
 
-    def failed_brief_once(messages, *, online=False):
+    def failed_brief_once(messages, *, online=False, **_kw):
         nonlocal calls
         calls += 1
         if calls == 1:

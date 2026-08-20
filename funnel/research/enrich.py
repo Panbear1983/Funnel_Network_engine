@@ -177,7 +177,7 @@ def enrich_companies(
         return counts
     try:
         block = "\n".join(f"- {c.name} ({c.role})" for c in candidates)
-        data = llm(prompts.company_estimates(block))
+        data = llm(prompts.company_estimates(block), max_tokens=2000)
     except Exception as exc:
         note(f"Estimates skipped ({type(exc).__name__}).")
         return counts

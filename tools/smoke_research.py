@@ -21,7 +21,7 @@ from funnel.research.ingest import commit_proposals  # noqa: E402
 from funnel.research.pipeline import run_pipeline  # noqa: E402
 
 
-def fake_llm(messages, *, online=False):
+def fake_llm(messages, *, online=False, **_kw):
     text = messages[-1]["content"]
     if "process stack" in text:
         return {"process_nodes": [
@@ -99,7 +99,7 @@ def run():
     assert len(evs) == 1 and len(evs[0].related_companies) == 2, evs
 
     # --- CJK names must NOT collapse into one entity (entity_slug guard) ----
-    def cjk_llm(messages, *, online=False):
+    def cjk_llm(messages, *, online=False, **_kw):
         text = messages[-1]["content"]
         if "process stack" in text:
             return {"process_nodes": [
@@ -143,7 +143,7 @@ def run():
     # --- unscraped evidence on a non-web provider is marked model_knowledge --
     os.environ["FUNNEL_LLM_PROVIDER"] = "nvidia"   # no web-search fallback
 
-    def recall_llm(messages, *, online=False):
+    def recall_llm(messages, *, online=False, **_kw):
         text = messages[-1]["content"]
         if "process stack" in text:
             return {"process_nodes": [
@@ -185,6 +185,30 @@ def run():
            if p.entity_type == "evidence"]
     assert ev4 and all(p.payload.get("provenance") == "scraped" for p in ev4), ev4
     assert all(p.payload["evidence_strength"] == "strong" for p in ev4)
+
+    # --- cooperative cancel: set after the process stack -> partial staging --
+    import threading
+    from funnel.db.models import ResearchRunOutcome
+    cancel_event = threading.Event()
+
+    def cancelling_llm(messages, *, online=False, **_kw):
+        result = fake_llm(messages, online=online)
+        if "process stack" in messages[-1]["content"]:
+            cancel_event.set()          # cancel lands before stage 3 begins
+        return result
+
+    r5 = repo.create_request("cancelled run")
+    r5.industry_of_interest = "EV batteries"
+    repo.update(r5)
+    run5 = run_pipeline(r5.id, "professional", llm=cancelling_llm,
+                        gather=fake_gather, online_fallback=False,
+                        cancel=cancel_event)
+    assert run5.status == ResearchRunOutcome.CANCELLED.value, run5.status
+    props5 = repo.list_proposals(r5.id, run_id=run5.id)
+    kinds5 = {p.entity_type for p in props5}
+    assert "process_node" in kinds5, kinds5          # staged work kept
+    assert "company" not in kinds5, kinds5           # stage 3 never ran
+    assert "cancelled by user" in run5.summary, run5.summary
 
     print("RESEARCH_OK proposals=", {k: len(v) for k, v in by.items()},
           "committed=", counts, "-> nodes", len(nodes), "comps", len(comps),

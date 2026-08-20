@@ -52,6 +52,8 @@ def chat_json(
     temperature: float = 0.2,
     timeout: float = 180.0,
     max_retries: int = 2,
+    max_tokens: int = 16000,
+    on_usage=None,
 ) -> dict:
     """One chat-completions call, parsed as JSON. `online` is ignored (NVIDIA
     has no web-search plugin) — kept for the shared llm() signature."""
@@ -67,7 +69,7 @@ def chat_json(
         "messages": messages,
         "temperature": temperature,
         "top_p": 0.9,
-        "max_tokens": 16000,  # explicit: default caps can truncate large JSON
+        "max_tokens": max_tokens,
         "stream": False,
     }
     if model not in _NO_JSON_MODE:
@@ -113,7 +115,13 @@ def chat_json(
             content = (choices[0].get("message") or {}).get("content") or ""
             content = _THINK_RE.sub("", content)  # drop reasoning traces
             try:
-                return _parse_json(content)
+                parsed = _parse_json(content)
+                if on_usage is not None:
+                    u = data.get("usage") or {}
+                    on_usage({"calls": 1,
+                              "prompt_tokens": u.get("prompt_tokens", 0) or 0,
+                              "completion_tokens": u.get("completion_tokens", 0) or 0})
+                return parsed
             except Exception as exc:
                 last_error = NvidiaError(
                     f"Non-JSON output from {model}: {content[:200]!r}")
@@ -136,11 +144,14 @@ def chat_json(
     raise NvidiaError(f"NVIDIA request failed: {last_error}") from last_error
 
 
-def make_llm(model: str, *, api_key: str | None = None) -> Callable[..., dict]:
+def make_llm(model: str, *, api_key: str | None = None,
+             on_usage=None) -> Callable[..., dict]:
     """Bind a model into the `llm(messages, online=False) -> dict` callable
     shape the pipeline expects."""
 
-    def llm(messages: list[dict], *, online: bool = False) -> dict:
-        return chat_json(messages, model, api_key=api_key, online=online)
+    def llm(messages: list[dict], *, online: bool = False,
+            max_tokens: int = 16000) -> dict:
+        return chat_json(messages, model, api_key=api_key, online=online,
+                         max_tokens=max_tokens, on_usage=on_usage)
 
     return llm

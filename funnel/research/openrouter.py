@@ -20,6 +20,8 @@ _sleep = time.sleep
 
 def _backoff(attempt: int) -> None:
     _sleep(min(8.0, 1.0 * (2 ** attempt)) * (0.5 + random.random()))
+
+
 _HEADERS_META = {
     "HTTP-Referer": "https://github.com/Panbear1983/Funnel_Network_engine",
     "X-Title": "Funnel Network Engine",
@@ -39,6 +41,8 @@ def chat_json(
     temperature: float = 0.2,
     timeout: float = 180.0,
     max_retries: int = 2,
+    max_tokens: int = 16000,
+    on_usage=None,
 ) -> dict:
     """One chat-completions call, parsed as JSON. online=True appends
     OpenRouter's `:online` web plugin (extra per-result fee applies)."""
@@ -52,7 +56,7 @@ def chat_json(
         "model": f"{model}:online" if online and ":" not in model else model,
         "messages": messages,
         "temperature": temperature,
-        "max_tokens": 16000,  # explicit: default caps can truncate large edge lists mid-JSON
+        "max_tokens": max_tokens,
         "response_format": {"type": "json_object"},
     }
     headers = {"Authorization": f"Bearer {key}", **_HEADERS_META}
@@ -81,7 +85,13 @@ def chat_json(
             content = (choices[0].get("message") or {}).get("content") or ""
             try:
                 # Parse inside the loop: truncated/chatty output re-requests.
-                return _parse_json(content)
+                parsed = _parse_json(content)
+                if on_usage is not None:
+                    u = data.get("usage") or {}
+                    on_usage({"calls": 1,
+                              "prompt_tokens": u.get("prompt_tokens", 0) or 0,
+                              "completion_tokens": u.get("completion_tokens", 0) or 0})
+                return parsed
             except Exception:
                 last_error = OpenRouterError(
                     f"Non-JSON output from {model}: {content[:200]!r}")
@@ -104,11 +114,14 @@ def chat_json(
     raise OpenRouterError(f"OpenRouter request failed: {last_error}") from last_error
 
 
-def make_llm(model: str, *, api_key: str | None = None) -> Callable[..., dict]:
+def make_llm(model: str, *, api_key: str | None = None,
+             on_usage=None) -> Callable[..., dict]:
     """Bind a model into the `llm(messages, online=False) -> dict` callable
     shape the pipeline expects."""
 
-    def llm(messages: list[dict], *, online: bool = False) -> dict:
-        return chat_json(messages, model, api_key=api_key, online=online)
+    def llm(messages: list[dict], *, online: bool = False,
+            max_tokens: int = 16000) -> dict:
+        return chat_json(messages, model, api_key=api_key, online=online,
+                         max_tokens=max_tokens, on_usage=on_usage)
 
     return llm

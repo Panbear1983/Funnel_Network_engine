@@ -146,6 +146,7 @@ class ResearchRunOutcome(str, Enum):
     NEEDS_CREDENTIALS = "needs_credentials"
     NO_CREDIBLE_RESULTS = "no_credible_results"
     FAILED = "failed"
+    CANCELLED = "cancelled"
 
 
 class ResearchRun(SQLModel, table=True):
@@ -159,6 +160,8 @@ class ResearchRun(SQLModel, table=True):
     summary: str = ""
     log: list = Field(default_factory=list, sa_type=JSON)
     counts: dict = Field(default_factory=dict, sa_type=JSON)
+    # LLM usage for the run: {"calls": n, "prompt_tokens": n, "completion_tokens": n}
+    usage: dict = Field(default_factory=dict, sa_type=JSON)
 
 
 class MapFeedback(SQLModel, table=True):

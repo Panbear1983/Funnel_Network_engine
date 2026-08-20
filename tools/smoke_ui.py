@@ -146,6 +146,29 @@ async def run() -> None:
         assert depth_w == 26, ("depth select", depth_w)
         assert gen.size.width >= 12, gen.size.width
 
+        # --- Cancel affordance: a cancellable busy run turns Build Map into
+        # an enabled Cancel button; non-cancellable busy disables it.
+        import threading as _threading
+        fp._cancel_event = _threading.Event()
+        fp._set_busy(True)
+        await pilot.pause()
+        assert str(gen.label) == "Cancel", gen.label
+        assert not gen.disabled, "Cancel must stay pressable while running"
+        fp._request_cancel()
+        await pilot.pause()
+        assert fp._cancel_event.is_set()
+        assert gen.disabled, "button disables once cancel was requested"
+        fp._set_busy(False)
+        await pilot.pause()
+        assert str(gen.label) == "Build Map", gen.label
+        assert not gen.disabled
+        # non-cancellable busy (build/seed): plain label, disabled
+        fp._set_busy(True)
+        await pilot.pause()
+        assert str(gen.label) == "Build Map" and gen.disabled
+        fp._set_busy(False)
+        await pilot.pause()
+
         # The Map result explains only stored coverage/provenance: usable
         # findings, source-backed evidence, gaps, and the detail inspection path.
         stored_run = repo.add(ResearchRun(

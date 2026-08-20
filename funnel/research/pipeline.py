@@ -5,6 +5,7 @@ human review — nothing touches the real graph here."""
 
 from __future__ import annotations
 
+import threading
 from datetime import datetime
 from typing import Callable, Optional
 
@@ -28,6 +29,11 @@ from funnel.research.tiers import get_tier, resolve_model
 LLM = Callable[..., dict]
 Gather = Callable[[str, int], tuple]
 Progress = Callable[[str], None]
+
+
+class RunCancelled(Exception):
+    """Raised at a stage boundary when the run's cancel Event is set. The run
+    finishes with outcome CANCELLED; staged proposals are kept."""
 
 
 def _f(value, default: float) -> float:
@@ -78,6 +84,8 @@ def run_pipeline(
     online_fallback: bool = True,
     profile: Optional[TopicProfile] = None,
     initial_skips: Optional[list[str]] = None,
+    cancel: Optional[threading.Event] = None,
+    usage: Optional[llm_factory.UsageTracker] = None,
 ) -> ResearchRun:
     tier = get_tier(tier_key)
     model = resolve_model(tier)
@@ -92,6 +100,12 @@ def run_pipeline(
         log.append(msg)
         if progress:
             progress(msg)
+
+    def check_cancel() -> None:
+        # Cooperative: honored at stage boundaries and loop tops; an in-flight
+        # HTTP call finishes first (the UI wording says so).
+        if cancel is not None and cancel.is_set():
+            raise RunCancelled()
 
     def skip(stage: str, exc: Exception) -> None:
         nonlocal credential_blocked
@@ -115,7 +129,7 @@ def run_pipeline(
                 skips=[f"research provider: {key_name} is not configured"],
             )
         try:
-            llm = llm_factory.make_llm(model)
+            llm = llm_factory.make_llm(model, usage=usage)
         except Exception as exc:
             skip("research provider", exc)
             return _finish(
@@ -171,10 +185,12 @@ def run_pipeline(
 
         # Stage 2 — process stack. Guarded: one flaky response here must not
         # FAIL the whole run — an empty stack degrades to NO_CREDIBLE_RESULTS.
+        check_cancel()
         note("Discovering process stack…")
         try:
             data = llm(prompts.process_stack(brief, tier.max_layers, tier.expand_inputs,
-                                             existing=existing_node_names))
+                                             existing=existing_node_names),
+                       max_tokens=4000)
         except Exception as exc:
             skip("process stack discovery", exc)
             data = {}
@@ -202,10 +218,12 @@ def run_pipeline(
                 note,
                 skips=skips,
                 prefix="dry-run",
+                usage=usage,
             )
 
         # Stage 2.5 — smart source planning: intent-tagged queries generated
         # from the topic (and its alias/jargon profile), not fixed templates.
+        check_cancel()
         note("Planning smart search queries…")
         query_plan = smartsearch.plan_queries(llm, brief, node_refs, tier, profile=profile)
         note(f"  smart queries planned for {len(query_plan)} nodes"
@@ -216,6 +234,7 @@ def run_pipeline(
         companies_acc: dict[str, dict] = {}  # ref_key -> accumulated proposal info
         context_pool: list[str] = []
         for ref, name in node_refs:
+            check_cancel()
             note(f"Researching companies for '{name}'…")
             text, urls = smart.gather_node(name, query_plan.get(ref),
                                            tier.sources_per_query,
@@ -234,7 +253,7 @@ def run_pipeline(
                                               tier.companies_per_node,
                                               known=existing_company_names,
                                               grounded=grounded),
-                    online=online,
+                    online=online, max_tokens=4000,
                 )
             except Exception as exc:
                 skip(f"company discovery for '{name}'", exc)
@@ -309,10 +328,11 @@ def run_pipeline(
         # Stage 4 — relationships
         staged_edges: list[tuple[str, str, str]] = []  # (from_ref, to_ref, evidence_level)
         if len(company_names) >= 2:
+            check_cancel()
             note("Inferring relationships…")
             lines = "\n".join(f"- {name}" for name in company_names.values())
             try:
-                data = llm(prompts.relationships(lines, brief))
+                data = llm(prompts.relationships(lines, brief), max_tokens=8000)
             except Exception as exc:
                 # One flaky LLM response must not kill the run (live run 2
                 # died here on truncated DeepSeek JSON).
@@ -374,6 +394,7 @@ def run_pipeline(
             context = "(no scraped text available — search the web for evidence)"
             evidence_online = True
         if tier.extract_evidence and context and company_names:
+            check_cancel()
             if evidence_online and not web_capable:
                 note("⚠ no scraped sources and no model web search — evidence "
                      "will be model-recalled and marked unverified.")
@@ -381,7 +402,7 @@ def run_pipeline(
             names = ", ".join(company_names.values())
             try:
                 data = llm(prompts.evidence_and_deals(context, names, tier.extract_deals),
-                           online=evidence_online)
+                           online=evidence_online, max_tokens=8000)
             except Exception as exc:
                 skip("evidence extraction", exc)
                 data = {}
@@ -416,6 +437,7 @@ def run_pipeline(
                     profile, recent_year=smart.recent_year, seen=smart._seen)
                 texts = []
                 for f, t in targets:
+                    check_cancel()
                     query = (f"{company_names[f]} {company_names[t]} "
                              "supply agreement partnership contract")
                     text, _ = ev_gather.gather_query(query, tier.sources_per_query)
@@ -430,7 +452,7 @@ def run_pipeline(
                     try:
                         data = llm(prompts.evidence_and_deals(
                             context2, ", ".join(company_names.values()), False),
-                            online=online2)
+                            online=online2, max_tokens=8000)
                     except Exception as exc:
                         skip("targeted evidence hunt", exc)
                         data = {}
@@ -449,6 +471,7 @@ def run_pipeline(
         if isr is not None and isr_hits:
             isr_evidence = 0
             for cref, hit in isr_hits.items():
+                check_cancel()
                 if cref not in company_names:
                     continue  # screened out above
                 for sc in isr.screenings(hit, needs_update_only=True, limit=3):
@@ -476,12 +499,13 @@ def run_pipeline(
         # claimed edges against the collected evidence; contradicted edges are
         # downgraded to "weak" before they ever reach the graph.
         if tier.contradiction_pass and staged_edges and ev_claims:
+            check_cancel()
             note("Checking for contradictions…")
             edges_block = "\n".join(
                 f"- {company_names[f]} → {company_names[t]} ({level})"
                 for f, t, level in staged_edges)
             try:
-                data = llm(prompts.contradictions(edges_block, "\n".join(ev_claims)))
+                data = llm(prompts.contradictions(edges_block, "\n".join(ev_claims)), max_tokens=2000)
             except Exception as exc:
                 skip("contradiction check", exc)
                 data = {}
@@ -506,7 +530,12 @@ def run_pipeline(
             log,
             note,
             skips=skips,
+            usage=usage,
         )
+    except RunCancelled:
+        note("Run cancelled — items staged so far are kept.")
+        return _finish(run, ResearchRunOutcome.CANCELLED, log, note,
+                       skips=skips, usage=usage)
     except Exception as exc:
         skip("research pipeline", exc)
         proposals = repo.list_proposals(run.request_id, run_id=run.id)
@@ -516,7 +545,7 @@ def run_pipeline(
             outcome = ResearchRunOutcome.PARTIAL
         else:
             outcome = ResearchRunOutcome.FAILED
-        return _finish(run, outcome, log, note, skips=skips)
+        return _finish(run, outcome, log, note, skips=skips, usage=usage)
 
 
 def _is_credentials_error(exc: Exception) -> bool:
@@ -561,6 +590,7 @@ def _finish(
     *,
     skips: Optional[list[str]] = None,
     prefix: str = "",
+    usage: Optional[llm_factory.UsageTracker] = None,
 ) -> ResearchRun:
     proposals = repo.list_proposals(run.request_id, run_id=run.id)
     counts: dict[str, int] = {}
@@ -580,6 +610,9 @@ def _finish(
             detail += ". Unavailable: " + "; ".join(skipped)
     elif outcome == ResearchRunOutcome.NO_CREDIBLE_RESULTS:
         detail = "No usable process nodes were proposed; request saved for refinement"
+    elif outcome == ResearchRunOutcome.CANCELLED:
+        detail = (count_text + "; cancelled by user — staged items kept"
+                  if count_text else "cancelled by user before anything was staged")
     else:
         detail = "No usable partial map was produced"
         if skipped:
@@ -588,6 +621,12 @@ def _finish(
     run.counts = counts
     label = outcome.value.replace("_", " ")
     run.summary = f"{label}: " + (f"{prefix}; " if prefix else "") + detail
+    # Cost/latency visibility — only when real provider calls happened, so
+    # offline smoke summaries stay byte-identical.
+    if usage is not None and usage.calls > 0:
+        run.usage = usage.as_dict()
+        elapsed = (datetime.now() - run.started_at).total_seconds()
+        run.summary += f" · {int(elapsed // 60)}m{int(elapsed % 60):02d}s · {usage.calls} LLM calls"
     note(run.summary)
     run.log = log
     run.finished_at = datetime.now()

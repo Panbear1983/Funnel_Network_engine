@@ -34,7 +34,7 @@ EV_CALLS: list[int] = []
 ANCHORED: list[str] = []
 
 
-def fake_llm(messages, *, online=False):
+def fake_llm(messages, *, online=False, **_kw):
     t = messages[-1]["content"]
     if "Propose a research brief" in t:
         return {"industry": "Espresso machines", "target_output": "Prosumer espresso machines",
@@ -118,7 +118,7 @@ def run() -> None:
         RESEARCH_CONTEXT_TEXT, context_text)
     auto_prompt: list[str] = []
 
-    def context_llm(messages, *, online=False):
+    def context_llm(messages, *, online=False, **_kw):
         auto_prompt.append(messages[-1]["content"])
         return {}
 
@@ -230,7 +230,7 @@ def run() -> None:
     # --- resilience: a flaky relationships call must not kill the run -------
     rid3 = repo.create_request("Flaky Topic").id
 
-    def flaky_llm(messages, *, online=False):
+    def flaky_llm(messages, *, online=False, **_kw):
         if "Infer supplier" in messages[-1]["content"]:
             raise ValueError("truncated JSON")
         return fake_llm(messages, online=online)
@@ -249,7 +249,7 @@ def run() -> None:
     def fake_fetch(ticker):
         return {"market_cap": 5e9, "revenue": 1e9, "symbol": ticker}
 
-    def fake_est_llm(messages, *, online=False):
+    def fake_est_llm(messages, *, online=False, **_kw):
         assert "revenue_purity" in messages[-1]["content"], "wrong prompt"
         return {"estimates": [{"name": "La Marzocco", "revenue_purity": 0.9,
                                "market_share": 0.4, "rationale": "focused maker"}]}

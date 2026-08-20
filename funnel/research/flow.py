@@ -68,7 +68,7 @@ def apply_brief(request_id: str, llm, progress: Optional[Progress] = None) -> To
     answers = repo.get_intake_answers(request_id)
     context_answer = answers.get(RESEARCH_CONTEXT_ID)
     research_context = context_answer.answer_value if context_answer else ""
-    data = llm(prompts.auto_brief(topic, research_context=research_context))
+    data = llm(prompts.auto_brief(topic, research_context=research_context), max_tokens=2000)
 
     filled = 0
     for qid, (attr, is_list) in _BRIEF_FIELDS.items():
@@ -97,8 +97,12 @@ def run_research(
     gather=None,
     progress: Optional[Progress] = None,
     online_fallback: bool = True,
+    cancel=None,
+    usage=None,
 ) -> ResearchRun:
-    """Auto-brief (1 call) + the staged research pipeline, with smart search."""
+    """Auto-brief (1 call) + the staged research pipeline, with smart search.
+    `cancel` is a threading.Event honored at stage boundaries; `usage` is a
+    llm_factory.UsageTracker accumulating call/token counts."""
     if llm is None:
         if not config.llm_api_key():
             return run_pipeline(
@@ -108,8 +112,10 @@ def run_research(
                 gather=gather,
                 progress=progress,
                 online_fallback=online_fallback,
+                cancel=cancel,
+                usage=usage,
             )
-        llm = llm_factory.make_llm(resolve_model(get_tier(tier_key)))
+        llm = llm_factory.make_llm(resolve_model(get_tier(tier_key)), usage=usage)
     skipped: list[str] = []
     if progress:
         progress("Understanding the topic…")
@@ -123,7 +129,8 @@ def run_research(
             progress(f"Auto-brief skipped ({type(exc).__name__}) — using existing intake.")
     return run_pipeline(request_id, tier_key, llm=llm, gather=gather,
                         progress=progress, online_fallback=online_fallback,
-                        profile=profile, initial_skips=skipped)
+                        profile=profile, initial_skips=skipped,
+                        cancel=cancel, usage=usage)
 
 
 def finalize(request_id: str, run_id: str,

@@ -38,7 +38,7 @@ from funnel.research.pipeline import run_pipeline  # noqa: E402
 SEEN_PROMPTS: list[str] = []
 
 
-def fake_llm(messages, *, online=False):
+def fake_llm(messages, *, online=False, **_kw):
     text = messages[-1]["content"]
     SEEN_PROMPTS.append(text)
     if "process stack" in text:

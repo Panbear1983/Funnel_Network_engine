@@ -35,7 +35,7 @@ from funnel.ui.panels.dossier import (  # noqa: E402
 )
 
 
-def fake_llm(messages, *, online=False):
+def fake_llm(messages, *, online=False, **_kw):
     text = messages[-1]["content"]
     if "process stack" in text:
         return {"process_nodes": [

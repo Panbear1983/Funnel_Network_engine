@@ -39,6 +39,7 @@ def _ensure_columns(engine) -> None:
         "companynode": {"financials": "JSON DEFAULT '{}'"},
         # scraped | model_knowledge | isr | "" (pre-migration rows / manual)
         "evidenceitem": {"provenance": "TEXT DEFAULT ''"},
+        "researchrun": {"usage": "JSON DEFAULT '{}'"},
     }
     with engine.connect() as conn:
         for table, cols in additions.items():

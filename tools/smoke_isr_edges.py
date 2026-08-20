@@ -60,7 +60,7 @@ EDGES = [
 ]
 
 
-def fake_llm(messages, *, online=False):
+def fake_llm(messages, *, online=False, **_kw):
     assert "counterparty_name" in messages[-1]["content"], "wrong prompt"
     return {"edges": EDGES}
 
@@ -123,7 +123,7 @@ def run() -> None:
     assert run_isr_edge_mining(r.id, plain.id, llm=fake_llm, isr=isr)["status"] == "no_dossier"
 
     # A malformed LLM response fails gracefully, commits nothing new.
-    def bad_llm(messages, *, online=False):
+    def bad_llm(messages, *, online=False, **_kw):
         raise ValueError("truncated JSON")
     edges_before = repo.count_for_request(RelationshipEdge, r.id)
     assert run_isr_edge_mining(r.id, subject.id, llm=bad_llm, isr=isr)["status"] == "failed"

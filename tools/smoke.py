@@ -284,7 +284,7 @@ async def run() -> None:
         from funnel.research import flow as _flow
         from funnel.ui.panels.flow import FlowPanel
 
-        def _fake_llm(messages, *, online=False):
+        def _fake_llm(messages, *, online=False, **_kw):
             t = messages[-1]["content"]
             if "Propose a research brief" in t:
                 return {"industry": "Widgets", "target_output": "Widgets",
