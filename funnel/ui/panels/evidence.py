@@ -5,8 +5,7 @@ from __future__ import annotations
 from typing import Optional
 
 from textual.app import ComposeResult
-from textual.containers import Vertical
-from textual.widgets import Input, Label, SelectionList, TabbedContent, TabPane
+from textual.widgets import Input, Label, SelectionList
 from textual.widgets.selection_list import Selection
 
 from funnel.db import repo
@@ -190,14 +189,3 @@ class DealPanel(CrudPanel):
             e.deal_value or "—",
             f"{e.confidence_score:.2f}",
         )
-
-
-class EvidenceDealsPanel(Vertical):
-    """Container with Evidence and Deals tabs."""
-
-    def compose(self) -> ComposeResult:
-        with TabbedContent(id="evidence-tabs"):
-            with TabPane("Evidence", id="e-evidence"):
-                yield EvidencePanel()
-            with TabPane("Deals", id="e-deal"):
-                yield DealPanel()

@@ -25,7 +25,7 @@ from funnel.db.models import (  # noqa: E402
 from funnel.intake.questions import (  # noqa: E402
     RESEARCH_CONTEXT_ID, RESEARCH_CONTEXT_SECTION, RESEARCH_CONTEXT_TEXT,
 )
-from funnel.research import flow  # noqa: E402
+from funnel.services import build as flow  # noqa: E402
 from funnel.research import pipeline, prompts  # noqa: E402
 from funnel.research.smartsearch import INTENT_SUFFIX, PlannedQuery, SmartGather  # noqa: E402
 

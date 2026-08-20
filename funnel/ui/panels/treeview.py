@@ -8,11 +8,8 @@ high-res raster is for sharing, this view is for reading in the app.
 
 from __future__ import annotations
 
-import subprocess
-import sys
 from typing import Optional
 
-from textual import work
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
@@ -21,11 +18,20 @@ from textual.widgets import Button, Static, Tree
 from funnel import config
 from funnel.export.chart import LAYER_LABEL, _short
 from funnel.export.chart_tree import _companies_for_node, _layers_present
+from funnel.export.openers import open_chart
 from funnel.graph.assembly import build_graph
 from funnel.ui.panels.dossier import DossierScreen, resolve_dossier
+from funnel.ui.workers import JobRunnerMixin
 
 
-class TreeViewPanel(Vertical):
+def _export_job(request_id: str):
+    def job(progress):
+        from funnel.services.build import export_map
+        return export_map(request_id, progress=progress)
+    return job
+
+
+class TreeViewPanel(JobRunnerMixin, Vertical):
     """Request-aware: rebuilds the tree whenever the selected request or its
     graph changes."""
 
@@ -137,27 +143,13 @@ class TreeViewPanel(Vertical):
         if not self.request_id:
             self.app.notify("Select or build a request first.", severity="warning")
             return
-        self._export_worker(self.request_id)
-
-    @work(thread=True, exclusive=True)
-    def _export_worker(self, request_id: str) -> None:
-        from funnel.research.flow import export_map
-        try:
-            result = export_map(request_id)
-        except Exception as exc:
-            self.app.call_from_thread(
-                self.app.notify, f"Export failed: {type(exc).__name__}", )
-            return
-        self.app.call_from_thread(self._export_done, result)
+        rid = self.request_id
+        self._run_job(_export_job(rid), self._export_done,
+                      on_error=lambda msg: self.app.notify(
+                          f"Export failed: {msg}", severity="error"))
 
     def _export_done(self, result: dict) -> None:
         charts = result.get("charts", {})
         self.app.notify(f"Exported {len(charts)} tree charts + report → "
                         f"{config.EXPORT_DIR}")
-        chart = charts.get("professional") or next(iter(charts.values()), None)
-        if chart and not getattr(self.app, "is_headless", False) \
-                and sys.platform == "darwin":
-            try:
-                subprocess.Popen(["open", chart])
-            except OSError:
-                pass
+        open_chart(charts, headless=getattr(self.app, "is_headless", False))

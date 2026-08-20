@@ -7,9 +7,8 @@ from typing import Optional
 
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.containers import Vertical
 from textual.widgets import (
-    Button, Input, Label, Select, SelectionList, Static, TabbedContent, TabPane,
+    Button, Input, Label, Select, SelectionList, Static,
 )
 from textual.widgets.selection_list import Selection
 
@@ -336,16 +335,3 @@ class EdgePanel(CrudPanel):
             e.evidence_level,
             f"{e.confidence_score:.2f}",
         )
-
-
-class GraphPanel(Vertical):
-    """Container with one inner tab per entity type."""
-
-    def compose(self) -> ComposeResult:
-        with TabbedContent(id="graph-tabs"):
-            with TabPane("Process nodes", id="g-process"):
-                yield ProcessNodePanel()
-            with TabPane("Companies", id="g-company"):
-                yield CompanyPanel()
-            with TabPane("Relationships", id="g-edge"):
-                yield EdgePanel()

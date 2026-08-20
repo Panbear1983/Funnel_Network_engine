@@ -319,6 +319,15 @@ class IsrKnowledge:
                 return hit
         return None
 
+    def lookup_company(self, name: Optional[str], ticker: Optional[str],
+                       country: Optional[str] = None) -> Optional[IsrCompany]:
+        """The canonical ticker-first-then-name lookup every caller needs
+        (grounding, enrichment, dossier, mining) — one implementation."""
+        hit = self.lookup(ticker, country=country) if ticker else None
+        if hit is None and name:
+            hit = self.lookup(name, country=country)
+        return hit
+
     @staticmethod
     def _resolve(bucket: list[IsrCompany],
                  country: Optional[str]) -> Optional[IsrCompany]:

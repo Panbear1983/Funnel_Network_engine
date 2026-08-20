@@ -25,7 +25,7 @@ from funnel.db import repo  # noqa: E402
 from funnel.db.engine import init_db  # noqa: E402
 from funnel.db.models import CompanyNode, ProcessNode  # noqa: E402
 from funnel.knowledge.isr import IsrCompany, IsrKnowledge  # noqa: E402
-from funnel.knowledge.isr_seed import run_isr_seed, seed_proposals  # noqa: E402
+from funnel.services.isr_seed import run_isr_seed, seed_proposals  # noqa: E402
 
 
 def _isr_company(cid, name, tier="potential"):

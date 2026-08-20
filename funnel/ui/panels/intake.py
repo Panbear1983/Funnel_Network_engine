@@ -56,9 +56,19 @@ class IntakePanel(Vertical):
                 "sections 3–7 are optional.", classes="flow-hint")
             for index, section in enumerate(SECTIONS):
                 with Collapsible(title=section.title, collapsed=index >= 2):
-                    for q in section.questions:
+                    live = [q for q in section.questions
+                            if q.id not in DORMANT_QIDS]
+                    planned = [q for q in section.questions
+                               if q.id in DORMANT_QIDS]
+                    for q in live:
                         yield Label(self._label_for(q), classes="field-label")
                         yield self._widget_for(q)
+                    if planned:
+                        # Planned-but-unwired settings render as plain text so
+                        # they never look like live controls that do nothing.
+                        names = "; ".join(q.text.rstrip("?") for q in planned)
+                        yield Static(f"[dim]Planned (not wired yet): {names}[/dim]",
+                                     classes="field-label")
         # Keep the primary action outside the scrollable questionnaire so it
         # remains reachable even when most optional sections are expanded.
         with Horizontal(classes="toolbar intake-actions"):
@@ -69,8 +79,6 @@ class IntakePanel(Vertical):
         text = q.text
         if q.id in REQUIRED_QIDS:
             text += " *"
-        if q.id in DORMANT_QIDS:
-            text += "  (not used yet)"
         return text
 
     def _widget_for(self, q: Question) -> Widget:
@@ -96,7 +104,8 @@ class IntakePanel(Vertical):
     # --- data ------------------------------------------------------------
     def _current_values(self) -> dict[str, str]:
         return {q.id: self._collect_value(q)
-                for section in SECTIONS for q in section.questions}
+                for section in SECTIONS for q in section.questions
+                if q.id not in DORMANT_QIDS}
 
     def _is_dirty(self) -> bool:
         return self._snapshot is not None and self._current_values() != self._snapshot
@@ -116,6 +125,8 @@ class IntakePanel(Vertical):
         answers = repo.get_intake_answers(request_id)
         for section in SECTIONS:
             for q in section.questions:
+                if q.id in DORMANT_QIDS:
+                    continue
                 answer = answers.get(q.id)
                 self._set_value(q, answer.answer_value if answer else None)
         self._snapshot = self._current_values()
@@ -170,6 +181,8 @@ class IntakePanel(Vertical):
             return
         for section in SECTIONS:
             for q in section.questions:
+                if q.id in DORMANT_QIDS:
+                    continue
                 value = self._collect_value(q)
                 repo.save_intake_answer(self.request_id, section.title, q.id, q.text, value)
                 self._apply_mapping(req, q, value)

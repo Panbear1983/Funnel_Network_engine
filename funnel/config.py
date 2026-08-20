@@ -101,6 +101,39 @@ def llm_api_key() -> str:
     return os.environ.get(llm_key_name(), "")
 
 
+# Per-tier model override env vars, per provider (single source of truth —
+# tiers.py asks here instead of reading os.environ itself).
+_MODEL_ENV = {
+    "nvidia": {"wide": "NVIDIA_MODEL",
+               "tiers": {"high_level": "NVIDIA_MODEL_HIGH",
+                         "professional": "NVIDIA_MODEL_PRO",
+                         "deep_research": "NVIDIA_MODEL_DEEP"}},
+    "openrouter": {"wide": "OPENROUTER_MODEL",
+                   "tiers": {"high_level": "OPENROUTER_MODEL_HIGH",
+                             "professional": "OPENROUTER_MODEL_PRO",
+                             "deep_research": "OPENROUTER_MODEL_DEEP"}},
+    "anthropic": {"wide": "ANTHROPIC_MODEL",
+                  "tiers": {"high_level": "ANTHROPIC_MODEL_HIGH",
+                            "professional": "ANTHROPIC_MODEL_PRO",
+                            "deep_research": "ANTHROPIC_MODEL_DEEP"}},
+}
+
+
+def model_override(provider: str, tier_key: str) -> str | None:
+    """Env-configured model for (provider, tier): per-tier var wins over the
+    provider-wide var; None when neither is set."""
+    spec = _MODEL_ENV.get(provider)
+    if not spec:
+        return None
+    return (os.environ.get(spec["tiers"].get(tier_key, ""), "")
+            or os.environ.get(spec["wide"], "")) or None
+
+
+def skip_enrich() -> bool:
+    """FUNNEL_SKIP_ENRICH=1 disables all company enrichment passes."""
+    return os.environ.get("FUNNEL_SKIP_ENRICH") == "1"
+
+
 def available_providers() -> list[str]:
     """Providers whose API key is actually set — used only for GUIDANCE (the
     active provider is never switched silently; FUNNEL_LLM_PROVIDER decides)."""

@@ -28,8 +28,10 @@ from funnel import config
 from funnel.db import repo
 from funnel.db.models import CompanyNode, Proposal, ResearchRun
 from funnel.knowledge.isr import IsrKnowledge, get_isr, split_ticker, yahoo_ticker
+from funnel.research import llm as llm_factory
 from funnel.research import prompts
 from funnel.research.ingest import commit_proposals, entity_slug, slugify
+from funnel.research.tiers import get_tier, resolve_model
 
 Progress = Callable[[str], None]
 
@@ -206,11 +208,8 @@ def run_isr_edge_mining(
     if subject is None:
         return {"status": "no_company", "company": 0, "edge": 0}
 
-    subject_hit = None
-    if subject.ticker:
-        subject_hit = isr.lookup(subject.ticker, country=subject.country)
-    if subject_hit is None and subject.name:
-        subject_hit = isr.lookup(subject.name, country=subject.country)
+    subject_hit = isr.lookup_company(subject.name, subject.ticker,
+                                     country=subject.country)
     dossier = isr.dossier(subject_hit) if subject_hit else None
     if not dossier:
         return {"status": "no_dossier", "company": 0, "edge": 0}
@@ -218,8 +217,6 @@ def run_isr_edge_mining(
     if llm is None:
         if not config.llm_api_key():
             return {"status": "needs_credentials", "company": 0, "edge": 0}
-        from funnel.research import llm as llm_factory
-        from funnel.research.tiers import get_tier, resolve_model
         llm = llm_factory.make_llm(resolve_model(get_tier("professional")))
 
     request_companies = repo.list_for_request(CompanyNode, request_id)

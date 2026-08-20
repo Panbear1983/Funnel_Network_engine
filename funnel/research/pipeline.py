@@ -290,10 +290,9 @@ def run_pipeline(
         if isr is not None:
             for cref, info in companies_acc.items():
                 payload = info["payload"]
-                hit = (isr.lookup(str(payload.get("ticker") or ""),
-                                  country=payload.get("country"))
-                       or isr.lookup(str(payload.get("name") or ""),
-                                     country=payload.get("country")))
+                hit = isr.lookup_company(str(payload.get("name") or ""),
+                                         str(payload.get("ticker") or ""),
+                                         country=payload.get("country"))
                 if hit is None:
                     continue
                 isr_hits[cref] = hit

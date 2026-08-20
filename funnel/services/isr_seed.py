@@ -22,7 +22,8 @@ from funnel.db import repo
 from funnel.db.models import CompanyNode, Proposal, ResearchRun
 from funnel.knowledge.isr import IsrKnowledge, get_isr
 from funnel.research.enrich import enrich_from_isr
-from funnel.research.ingest import slugify
+from funnel.research.ingest import commit_proposals, slugify
+from funnel.services.build import export_map
 
 Progress = Callable[[str], None]
 
@@ -122,7 +123,6 @@ def run_isr_seed(
             ref_key=pr["ref_key"], payload=pr["payload"],
             rationale=pr["rationale"], confidence=pr["confidence"],
             sources=pr["sources"], status="pending"))
-    from funnel.research.ingest import commit_proposals
     counts = commit_proposals(request_id, run_id=run.id)
 
     # Attach dossiers offline (never the networked yfinance/estimates passes).
@@ -131,7 +131,6 @@ def run_isr_seed(
 
     result = {"status": "ok", **counts}
     if export:
-        from funnel.research.flow import export_map
         note("Exporting tree charts…")
         result.update(export_map(request_id, progress=progress))
     return result

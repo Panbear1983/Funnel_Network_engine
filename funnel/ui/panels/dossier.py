@@ -8,7 +8,6 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Optional
 
-from textual import work
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
@@ -17,6 +16,7 @@ from textual.widgets import Button, Label, Static
 
 from funnel.db.models import CompanyNode
 from funnel.knowledge.isr import get_isr
+from funnel.ui.workers import JobRunnerMixin
 
 # The 22 record_json keys in reading order (identity -> business -> outlook).
 DOSSIER_FIELDS: tuple[str, ...] = (
@@ -35,11 +35,8 @@ def resolve_dossier(company: CompanyNode) -> Optional[dict]:
     {'label', 'fields', 'updated_at', 'screenings', 'live'}"""
     isr = get_isr()
     if isr is not None:
-        hit = None
-        if company.ticker:
-            hit = isr.lookup(company.ticker, country=company.country)
-        if hit is None and company.name:
-            hit = isr.lookup(company.name, country=company.country)
+        hit = isr.lookup_company(company.name, company.ticker,
+                                 country=company.country)
         if hit is not None:
             fields = isr.dossier(hit)
             if fields:
@@ -105,7 +102,7 @@ def staleness_suffix(updated_at: Optional[str]) -> str:
     return f" [green]({age}d ago)[/green]"
 
 
-class DossierScreen(ModalScreen[None]):
+class DossierScreen(JobRunnerMixin, ModalScreen[None]):
     """Read-only modal rendering one company's ISR dossier."""
 
     BINDINGS = [Binding("escape", "dismiss_modal", "Close")]
@@ -163,14 +160,15 @@ class DossierScreen(ModalScreen[None]):
         except Exception:
             pass
         self.app.notify("Mining ISR relationships…")
-        self._mine_worker()
+        request_id, company_id = self._company.request_id, self._company.id
 
-    @work(thread=True, exclusive=True)
-    def _mine_worker(self) -> None:
-        from funnel.knowledge.isr_edges import run_isr_edge_mining
-        result = run_isr_edge_mining(
-            self._company.request_id, self._company.id)
-        self.app.call_from_thread(self._mine_done, result)
+        def job(progress):
+            from funnel.services.isr_edges import run_isr_edge_mining
+            return run_isr_edge_mining(request_id, company_id, progress=progress)
+
+        self._run_job(job, self._mine_done,
+                      on_error=lambda msg: self._mine_done(
+                          {"status": "failed", "error": msg}))
 
     def _mine_done(self, result: dict) -> None:
         status = result.get("status")

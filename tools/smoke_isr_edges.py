@@ -27,7 +27,7 @@ from funnel.db import repo  # noqa: E402
 from funnel.db.engine import init_db  # noqa: E402
 from funnel.db.models import CompanyNode, RelationshipEdge  # noqa: E402
 from funnel.knowledge.isr import IsrKnowledge  # noqa: E402
-from funnel.knowledge.isr_edges import run_isr_edge_mining  # noqa: E402
+from funnel.services.isr_edges import run_isr_edge_mining  # noqa: E402
 
 # Accton's fixture dossier: Clients "Meta、Amazon 等 CSP 客戶",
 # Competitors "Cisco, Arista, Celestica", Core "…networking switches…".

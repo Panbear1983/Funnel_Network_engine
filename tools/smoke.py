@@ -281,7 +281,7 @@ async def run() -> None:
         from textual.widgets import Input as _Input
 
         from funnel.db.models import Proposal
-        from funnel.research import flow as _flow
+        from funnel.services import build as _flow
         from funnel.ui.panels.flow import FlowPanel
 
         def _fake_llm(messages, *, online=False, **_kw):

@@ -18,11 +18,11 @@ Skip everything with FUNNEL_SKIP_ENRICH=1.
 
 from __future__ import annotations
 
-import os
 import re
 from datetime import datetime
 from typing import Callable, Optional
 
+from funnel import config
 from funnel.db import repo
 from funnel.db.models import CompanyNode
 from funnel.knowledge.isr import IsrKnowledge, exchange_label
@@ -69,11 +69,7 @@ def enrich_from_isr(companies: list[CompanyNode],
         return 0
     filled = 0
     for c in companies:
-        hit = None
-        if c.ticker:
-            hit = isr.lookup(c.ticker, country=c.country)
-        if hit is None and c.name:
-            hit = isr.lookup(c.name, country=c.country)
+        hit = isr.lookup_company(c.name, c.ticker, country=c.country)
         if hit is None:
             continue
         changed = False
@@ -136,7 +132,7 @@ def enrich_companies(
 ) -> dict:
     """Run both passes over a request's committed companies. Returns counts
     {'financials': n, 'estimates': m}."""
-    if os.environ.get("FUNNEL_SKIP_ENRICH") == "1":
+    if config.skip_enrich():
         return {"financials": 0, "estimates": 0}
 
     def note(msg: str) -> None:

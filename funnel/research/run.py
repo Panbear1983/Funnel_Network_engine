@@ -15,7 +15,7 @@ import sys
 from funnel.db import repo
 from funnel.db.models import ResearchRunOutcome
 from funnel.db.engine import init_db
-from funnel.research import flow
+from funnel.services import build as flow
 from funnel.research.ingest import commit_proposals
 from funnel.research.pipeline import run_pipeline
 

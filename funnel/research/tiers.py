@@ -5,7 +5,6 @@ Anthropic (default) uses Claude aliases matched to depth; OpenRouter
 
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
 
 from funnel import config
@@ -59,38 +58,27 @@ def get_tier(key: str) -> TierConfig:
     return TIERS.get(key, TIERS["professional"])
 
 
-# Non-Anthropic providers: per-tier env override → provider-wide env → per-tier
-# default. NVIDIA defaults are Llama-3.x instruct models (strong instruction
-# following + clean JSON, no <think> traces) sized to each tier; override any
-# tier via NVIDIA_MODEL_HIGH/PRO/DEEP or NVIDIA_MODEL. OpenRouter keeps its
-# DeepSeek defaults.
-_ALT_PROVIDERS = {
-    "openrouter": {
-        "env": {"high_level": "OPENROUTER_MODEL_HIGH",
-                "professional": "OPENROUTER_MODEL_PRO",
-                "deep_research": "OPENROUTER_MODEL_DEEP"},
-        "wide": "OPENROUTER_MODEL",
-        "defaults": {"high_level": "deepseek/deepseek-chat",
-                     "professional": "deepseek/deepseek-chat",
-                     "deep_research": "deepseek/deepseek-chat"},
-    },
-    "nvidia": {
-        "env": {"high_level": "NVIDIA_MODEL_HIGH",
-                "professional": "NVIDIA_MODEL_PRO",
-                "deep_research": "NVIDIA_MODEL_DEEP"},
-        "wide": "NVIDIA_MODEL",
-        "defaults": {"high_level": "meta/llama-3.1-8b-instruct",
-                     "professional": "meta/llama-3.3-70b-instruct",
-                     "deep_research": "meta/llama-3.1-405b-instruct"},
-    },
+# Non-Anthropic per-tier model DEFAULTS (env overrides live in config._MODEL_ENV;
+# resolve_model asks config.model_override first). NVIDIA defaults are
+# Llama-3.x instruct models sized to each tier; OpenRouter keeps DeepSeek.
+_ALT_DEFAULTS = {
+    "openrouter": {"high_level": "deepseek/deepseek-chat",
+                   "professional": "deepseek/deepseek-chat",
+                   "deep_research": "deepseek/deepseek-chat"},
+    "nvidia": {"high_level": "meta/llama-3.1-8b-instruct",
+               "professional": "meta/llama-3.3-70b-instruct",
+               "deep_research": "meta/llama-3.1-405b-instruct"},
 }
 
 
 def resolve_model(tier: TierConfig) -> str:
-    """Provider-aware: tier env override → provider-wide env → tier default."""
-    spec = _ALT_PROVIDERS.get(config.llm_provider())
-    if spec:
-        return (os.environ.get(spec["env"].get(tier.key, ""))
-                or os.environ.get(spec["wide"])
-                or spec["defaults"].get(tier.key, spec["defaults"]["professional"]))
-    return os.environ.get(tier.model_env) or os.environ.get("ANTHROPIC_MODEL") or tier.default_model
+    """Provider-aware: tier env override → provider-wide env → tier default.
+    All env reads go through config.model_override (the config SSOT)."""
+    provider = config.llm_provider()
+    override = config.model_override(provider, tier.key)
+    if override:
+        return override
+    defaults = _ALT_DEFAULTS.get(provider)
+    if defaults:
+        return defaults.get(tier.key, defaults["professional"])
+    return tier.default_model

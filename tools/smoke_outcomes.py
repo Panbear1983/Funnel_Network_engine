@@ -18,7 +18,7 @@ os.environ.setdefault("FUNNEL_ISR_DB", "")
 from funnel.db import repo  # noqa: E402
 from funnel.db.engine import init_db  # noqa: E402
 from funnel.db.models import ProcessNode, ResearchRunOutcome  # noqa: E402
-from funnel.research import flow  # noqa: E402
+from funnel.services import build as flow  # noqa: E402
 from funnel.research.pipeline import run_pipeline  # noqa: E402
 
 

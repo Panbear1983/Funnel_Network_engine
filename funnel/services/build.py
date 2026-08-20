@@ -1,5 +1,5 @@
-"""The one-topic flow: topic → auto-brief → smart research → (review) →
-commit + tree charts at all three detail levels.
+"""Build service — the one-topic flow: topic → auto-brief → smart research →
+(review) → commit + tree charts at all three detail levels.
 
 This is the engine behind the Map tab and the `--topic` CLI. The auto-brief
 replaces the manual questionnaire on the golden path: one LLM call proposes the

@@ -8,15 +8,10 @@ keeps manual proposal review available without crowding the beginner flow.
 from __future__ import annotations
 
 import json
-import subprocess
-import sys
 import threading
-from collections import Counter
 from datetime import datetime
 from typing import Optional
-from urllib.parse import urlparse
 
-from textual import work
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
@@ -40,10 +35,12 @@ from funnel.intake.questions import (
     RESEARCH_CONTEXT_SECTION,
     RESEARCH_CONTEXT_TEXT,
 )
-from funnel.research import flow as flow_engine
+from funnel.services import build as flow_engine
 from funnel.research import llm as llm_factory
 from funnel.research.tiers import TIER_ORDER, TIERS, get_tier, resolve_model
+from funnel.export.openers import open_chart
 from funnel.ui.fieldutils import truncate
+from funnel.ui.workers import JobRunnerMixin
 from funnel.ui.panels.dossier import (
     DossierScreen,
     resolve_dossier,
@@ -53,223 +50,17 @@ from funnel.ui.panels.dossier import (
 _MARK = {"pending": "✓", "accepted": "✓", "rejected": "✗",
          "committed": "→", "skipped": "–"}
 
-_ACTIVE_STAGES = (
-    ("Stage 5 of 5 — Building and exporting your map", (
-        "automatic building", "building map", "committed ", "enriching companies",
-        "tree chart", "report →",
-    )),
-    ("Stage 4 of 5 — Checking relationships and evidence", (
-        "inferring relationships", "extracting evidence", "hunting evidence",
-        "checking for contradictions", "relationship", "evidence",
-    )),
-    ("Stage 3 of 5 — Finding relevant companies", (
-        "researching companies", "companies found", "unique companies",
-    )),
-    ("Stage 2 of 5 — Sketching the value-chain steps", (
-        "discovering process stack", "process nodes", "planning smart search",
-        "smart queries",
-    )),
-    ("Stage 1 of 5 — Understanding your topic", (
-        "understanding the topic", "auto-brief", "brief built",
-    )),
+from funnel.research.narrate import (
+    coverage_summary as _coverage_summary,
+    outcome_guidance as _outcome_guidance,
+    plain_stage as _plain_stage,
 )
 
 
-def _plain_stage(progress_line: str) -> Optional[str]:
-    """Translate internal progress messages into stable beginner-facing stages."""
-    normalized = progress_line.casefold()
-    for label, markers in _ACTIVE_STAGES:
-        if any(marker in normalized for marker in markers):
-            return label
-    return None
-
-
-def _outcome_guidance(status: str, *, auto_build: bool, key_name: str) -> str:
-    """Return one concise recovery/continuation action for every run outcome."""
-    if status == ResearchRunOutcome.COMPLETE.value:
-        next_step = (
-            "finishing your map automatically."
-            if auto_build else
-            "review the proposed map items, then choose Finish Reviewed Map."
-        )
-        return f"[b]Research complete.[/b] Next: {next_step}"
-    if status == ResearchRunOutcome.PARTIAL.value:
-        next_step = (
-            "finishing a map with the usable items found; refine it afterward if needed."
-            if auto_build else
-            "review the usable items found, then choose Finish Reviewed Map."
-        )
-        return f"[b]Some research was unavailable, but usable items were saved.[/b] Next: {next_step}"
-    if status == ResearchRunOutcome.NEEDS_CREDENTIALS.value:
-        hint = config.other_provider_hint()
-        return (
-            f"[b]Request saved; research credentials are needed.[/b] "
-            f"Next: set {key_name} in .env at the repo root (copy .env.example "
-            f"if you have no .env), then choose Build Map again."
-            + (f" {hint}" if hint else "")
-        )
-    if status == ResearchRunOutcome.NO_CREDIBLE_RESULTS.value:
-        return (
-            "[b]No credible map items were found; your request is saved.[/b] "
-            "Next: add one detail in the optional context, then choose Build Map again."
-        )
-    if status == ResearchRunOutcome.FAILED.value:
-        return (
-            "[b]Research stopped before a usable map was produced; your request is saved.[/b] "
-            "Next: choose Build Map to retry, or adjust the topic or optional context first."
-        )
-    if status == ResearchRunOutcome.CANCELLED.value:
-        return (
-            "[b]Run cancelled — items found so far are kept.[/b] "
-            "Next: choose Build Map to start again, or expand Advanced review "
-            "to use what was staged."
-        )
-    return ""
-
-
-def _plural(count: int, singular: str, plural: Optional[str] = None) -> str:
-    return f"{count} {singular if count == 1 else (plural or singular + 's')}"
-
-
-def _source_urls(proposal: Proposal) -> set[str]:
-    """Return only inspectable links already stored on a proposal."""
-    values = list(proposal.sources or [])
-    if proposal.entity_type == "evidence":
-        values.append(proposal.payload.get("source_url", ""))
-    return {
-        value.strip()
-        for value in values
-        if isinstance(value, str)
-        and value.strip().casefold().startswith(("http://", "https://"))
-    }
-
-
-def _unavailable_stages(run: ResearchRun) -> list[str]:
-    """Extract stage names from stored skip log lines without exposing errors."""
-    stages: list[str] = []
-
-    def remember(value: str) -> None:
-        stage = value.split(":", 1)[0].strip()
-        if stage and stage not in stages:
-            stages.append(stage)
-
-    for line in run.log or []:
-        if not isinstance(line, str) or not line.casefold().startswith("skipped "):
-            continue
-        remember(line[8:])
-    # Initial failures such as auto-brief are stored in the terminal summary,
-    # not as individual log entries.
-    summary = run.summary or ""
-    for marker in (". Skipped: ", ". Unavailable: "):
-        if marker in summary:
-            for value in summary.split(marker, 1)[1].split(";"):
-                remember(value)
-    return stages
-
-
-def _coverage_summary(run: ResearchRun, proposals: list[Proposal]) -> str:
-    """Explain stored run coverage and provenance without doing new research."""
-    usable = [p for p in proposals if p.status not in {"rejected", "skipped"}]
-    counts = Counter(p.entity_type for p in usable)
-    found_parts = [
-        _plural(counts["process_node"], "process step"),
-        _plural(counts["company"], "company", "companies"),
-        _plural(counts["edge"], "relationship"),
-    ]
-    if counts["deal"]:
-        found_parts.append(_plural(counts["deal"], "deal"))
-
-    evidence = [p for p in usable if p.entity_type == "evidence"]
-    sourced_evidence = [p for p in evidence if _source_urls(p)]
-    all_urls = set().union(*(_source_urls(p) for p in usable)) if usable else set()
-    sites = sorted({
-        urlparse(url).netloc.casefold().removeprefix("www.")
-        for url in all_urls
-        if urlparse(url).netloc
-    })
-    site_hint = f" ({', '.join(sites[:3])}{'…' if len(sites) > 3 else ''})" if sites else ""
-
-    company_refs = {p.ref_key for p in usable if p.entity_type == "company"}
-    sourced_company_refs: set[str] = set()
-    for proposal in usable:
-        if proposal.entity_type == "company" and _source_urls(proposal):
-            sourced_company_refs.add(proposal.ref_key)
-    for proposal in sourced_evidence:
-        sourced_company_refs.update(proposal.payload.get("related_companies", []))
-    sourced_company_refs.intersection_update(company_refs)
-
-    evidence_pairs = [
-        set(p.payload.get("related_companies", []))
-        for p in sourced_evidence
-    ]
-    edges = [p for p in usable if p.entity_type == "edge"]
-    covered_edges = 0
-    for edge in edges:
-        pair = {
-            edge.payload.get("from_company", ""),
-            edge.payload.get("to_company", ""),
-        }
-        if _source_urls(edge) or (
-            "" not in pair and any(pair <= evidence_pair for evidence_pair in evidence_pairs)
-        ):
-            covered_edges += 1
-
-    if evidence:
-        provenance = (
-            f"{len(sourced_evidence)} of {len(evidence)} saved evidence items include "
-            f"a source link; {_plural(len(all_urls), 'unique link')}{site_hint}. "
-            f"{len(sourced_company_refs)} of {counts['company']} companies and "
-            f"{covered_edges} of {len(edges)} relationships are linked to sourced evidence."
-        )
-    else:
-        provenance = (
-            "No evidence items with inspectable source links were saved for this run."
-        )
-
-    uncertainties: list[str] = []
-    unverified = [p for p in usable if p.entity_type == "evidence"
-                  and p.payload.get("provenance") == "model_knowledge"]
-    if unverified:
-        uncertainties.append(
-            f"{_plural(len(unverified), 'evidence item')} "
-            f"{'is' if len(unverified) == 1 else 'are'} model-recalled "
-            f"(no source was fetched; links unverified)"
-        )
-    if not evidence:
-        uncertainties.append("the run saved no source-backed evidence")
-    missing_evidence_links = len(evidence) - len(sourced_evidence)
-    if missing_evidence_links:
-        uncertainties.append(
-            f"{_plural(missing_evidence_links, 'evidence item')} "
-            f"{'has' if missing_evidence_links == 1 else 'have'} no source link"
-        )
-    uncovered_edges = len(edges) - covered_edges
-    if uncovered_edges:
-        uncertainties.append(
-            f"{_plural(uncovered_edges, 'relationship')} "
-            f"{'lacks' if uncovered_edges == 1 else 'lack'} saved source-backed evidence"
-        )
-    unavailable = _unavailable_stages(run)
-    if unavailable:
-        shown = ", ".join(unavailable[:2])
-        if len(unavailable) > 2:
-            shown += f", and {len(unavailable) - 2} more"
-        uncertainties.append(f"coverage is incomplete because {shown} was unavailable")
-    elif run.status == ResearchRunOutcome.PARTIAL.value:
-        uncertainties.append("the run is partial because some research was unavailable")
-    if not uncertainties:
-        uncertainties.append(
-            "no stored source gap was flagged, but the saved evidence still needs review"
-        )
-
-    return (
-        "[b]Research coverage[/b]\n"
-        f"Found: {', '.join(found_parts[:-1])}, and {found_parts[-1]}.\n"
-        f"Sources: {provenance}\n"
-        f"Uncertain: {'; '.join(uncertainties)}.\n"
-        "Inspect: expand Advanced review and press [b]v[/b] on an item; after "
-        "building, open Advanced → Evidence (F2) for claims, links, and quotes."
-    )
+def _run_isr_seed_job(request_id, industry, tier, progress):
+    from funnel.services.isr_seed import run_isr_seed
+    return run_isr_seed(request_id, industry=industry, tier=tier,
+                        progress=progress)
 
 
 class ProposalDetailModal(ModalScreen[None]):
@@ -306,7 +97,7 @@ class ProposalDetailModal(ModalScreen[None]):
         self.dismiss(None)
 
 
-class FlowPanel(Vertical):
+class FlowPanel(JobRunnerMixin, Vertical):
     BINDINGS = [
         Binding("v", "view_details", "Details"),
         Binding("a", "restore_all", "Restore all"),
@@ -356,28 +147,6 @@ class FlowPanel(Vertical):
                  ("Supporting", "supporting"), ("Minor suppliers", "minor_supplier")],
                 prompt="Any tier", allow_blank=True, id="isr-tier")
             yield Button("Seed from ISR (no LLM)", id="isr-seed-btn")
-        with Vertical(id="flow-feedback"):
-            yield Static(
-                "[b]Optional novice-pilot feedback[/b]\n"
-                "Was this map useful? Your response stays in the local app "
-                "database and is never treated as research evidence.",
-                classes="flow-feedback-hint",
-            )
-            with Horizontal(classes="flow-feedback-fields"):
-                yield Select(
-                    [("Yes — useful", "yes"), ("No — not useful", "no")],
-                    prompt="Was this map useful?",
-                    id="flow-feedback-useful",
-                )
-                yield Input(
-                    placeholder="Short note (optional, 500 characters)",
-                    max_length=500,
-                    id="flow-feedback-note",
-                )
-            with Horizontal(classes="toolbar flow-feedback-actions"):
-                yield Button("Save locally", id="flow-feedback-save",
-                             variant="primary")
-                yield Button("Skip", id="flow-feedback-skip")
         yield Static("", id="flow-keys")
         # ISR dossier of the headline company — placed high so it is never
         # clipped below the log, with a visible button (the 'd' key is stolen
@@ -414,7 +183,6 @@ class FlowPanel(Vertical):
         table = self.query_one("#flow-table", DataTable)
         table.cursor_type = "row"
         table.add_columns(" ", "Type", "Name", "Detail", "Conf", "Status")
-        self._hide_feedback()
         self.query_one("#flow-dossier-bar").display = False
         self._populate_isr_seed()
         self._refresh_key_status()
@@ -499,7 +267,6 @@ class FlowPanel(Vertical):
         latest = repo.latest_run(request_id) if request_id else None
         self.run_id = latest.id if latest else None
         self.query_one("#flow-result", Static).update("")
-        self._hide_feedback()
         self._render_proposals()
         self._render_coverage()
         self._update_dossier_line()
@@ -607,12 +374,6 @@ class FlowPanel(Vertical):
         elif event.button.id == "flow-build":
             event.stop()
             self._start_build()
-        elif event.button.id == "flow-feedback-save":
-            event.stop()
-            self._save_feedback()
-        elif event.button.id == "flow-feedback-skip":
-            event.stop()
-            self._hide_feedback()
         elif event.button.id == "flow-dossier-btn":
             event.stop()
             self.action_show_dossier()
@@ -715,14 +476,17 @@ class FlowPanel(Vertical):
         log.clear()
         self.query_one("#flow-coverage", Static).update("")
         self.query_one("#flow-result", Static).update("")
-        self._hide_feedback()
         tier = self._depth()
         log.write_line(f"Building map for '{topic}' ({get_tier(tier).label})…")
         self._cancel_event = threading.Event()
         self._usage = llm_factory.UsageTracker()
         self._set_busy(True)
         self._set_active_stage("Stage 1 of 5 — Understanding your topic")
-        self._generate_worker(rid, tier, self._cancel_event, self._usage)
+        cancel_event, usage = self._cancel_event, self._usage
+        self._run_job(
+            lambda progress: flow_engine.run_research(
+                rid, tier, progress=progress, cancel=cancel_event, usage=usage),
+            lambda run: self._generate_done(run.id, run.status, run.summary))
 
     def _request_cancel(self) -> None:
         if self._cancel_event is None or self._cancel_event.is_set():
@@ -731,18 +495,13 @@ class FlowPanel(Vertical):
         self.query_one("#flow-generate", Button).disabled = True
         self.app.notify("Cancelling — finishing the current call first…")
 
-    @work(thread=True, exclusive=True)
-    def _generate_worker(self, request_id: str, tier_key: str,
-                         cancel, usage) -> None:
-        def progress(line: str) -> None:
-            self.app.call_from_thread(self._log_line, line)
-        try:
-            run = flow_engine.run_research(request_id, tier_key, progress=progress,
-                                           cancel=cancel, usage=usage)
-        except Exception as exc:
-            self.app.call_from_thread(self._step_failed, f"{type(exc).__name__}: {exc}")
-            return
-        self.app.call_from_thread(self._generate_done, run.id, run.status, run.summary)
+    # JobRunnerMixin hooks: progress lines feed the log; failures land in
+    # the standard step-failed handler.
+    def _job_progress(self, line: str) -> None:
+        self._log_line(line)
+
+    def _job_failed(self, message: str) -> None:
+        self._step_failed(message)
 
     def _log_line(self, line: str) -> None:
         if self._flow_busy:
@@ -806,7 +565,6 @@ class FlowPanel(Vertical):
     def _step_failed(self, message: str) -> None:
         self._set_busy(False)
         self._set_active_stage(None)
-        self._hide_feedback()
         self._log_line(f"FAILED: {message}")
         self.query_one("#flow-result", Static).update(
             "[b]This run stopped unexpectedly.[/b] "
@@ -823,18 +581,10 @@ class FlowPanel(Vertical):
         self._set_busy(True)
         self._set_active_stage("Stage 5 of 5 — Building and exporting your map")
         self._log_line("Building map…")
-        self._build_worker(self.request_id, self.run_id)
-
-    @work(thread=True, exclusive=True)
-    def _build_worker(self, request_id: str, run_id: str) -> None:
-        def progress(line: str) -> None:
-            self.app.call_from_thread(self._log_line, line)
-        try:
-            result = flow_engine.finalize(request_id, run_id, progress=progress)
-        except Exception as exc:
-            self.app.call_from_thread(self._step_failed, f"{type(exc).__name__}: {exc}")
-            return
-        self.app.call_from_thread(self._build_done, result)
+        rid, run_id = self.request_id, self.run_id
+        self._run_job(
+            lambda progress: flow_engine.finalize(rid, run_id, progress=progress),
+            self._build_done)
 
     def _build_done(self, result: dict) -> None:
         self._set_busy(False)
@@ -853,8 +603,7 @@ class FlowPanel(Vertical):
             + " · trees: " + " · ".join(f"[b]{res}[/b]" for res in charts)
             + f" → {config.EXPORT_DIR}")
         self._update_dossier_line()
-        self._open_chart(charts)
-        self._show_feedback()
+        open_chart(charts, headless=getattr(self.app, 'is_headless', False))
         self.app.notify("Map built — view it in the Tree tab; charts also "
                         "exported and opened in Preview.")
 
@@ -874,11 +623,7 @@ class FlowPanel(Vertical):
         companies = repo.list_for_request(CompanyNode, self.request_id)
         for c in sorted(companies, key=lambda c: c.confidence_score,
                         reverse=True):
-            hit = None
-            if c.ticker:
-                hit = isr.lookup(c.ticker, country=c.country)
-            if hit is None and c.name:
-                hit = isr.lookup(c.name, country=c.country)
+            hit = isr.lookup_company(c.name, c.ticker, country=c.country)
             if hit is not None:
                 self._dossier_company_id = c.id
                 updated = (hit.dossier_updated_at or "unknown")[:10]
@@ -910,23 +655,9 @@ class FlowPanel(Vertical):
         self._set_busy(True)
         self._set_active_stage("Seeding a map from ISR (no LLM)…")
         self._log_line("Seeding from the ISR knowledge base…")
-        self._isr_seed_worker(request_id, industry, tier)
-
-    @work(thread=True, exclusive=True)
-    def _isr_seed_worker(self, request_id: str, industry: Optional[str],
-                         tier: Optional[str]) -> None:
-        from funnel.knowledge.isr_seed import run_isr_seed
-
-        def progress(line: str) -> None:
-            self.app.call_from_thread(self._log_line, line)
-        try:
-            result = run_isr_seed(request_id, industry=industry, tier=tier,
-                                  progress=progress)
-        except Exception as exc:
-            self.app.call_from_thread(
-                self._step_failed, f"{type(exc).__name__}: {exc}")
-            return
-        self.app.call_from_thread(self._isr_seed_done, result)
+        self._run_job(
+            lambda progress: _run_isr_seed_job(request_id, industry, tier, progress),
+            self._isr_seed_done)
 
     def _isr_seed_done(self, result: dict) -> None:
         self._set_busy(False)
@@ -952,7 +683,7 @@ class FlowPanel(Vertical):
             + (" · trees: " + " · ".join(f"[b]{r}[/b]" for r in charts)
                if charts else ""))
         if charts:
-            self._open_chart(charts)
+            open_chart(charts, headless=getattr(self.app, 'is_headless', False))
         self.app.notify(f"Seeded {companies} companies from ISR (no LLM) — "
                         "view it in the Tree tab.")
 
@@ -965,48 +696,3 @@ class FlowPanel(Vertical):
             self.app.notify("No ISR dossier available.", severity="information")
             return
         self.app.push_screen(DossierScreen(company, bundle))
-
-    # --- optional local pilot feedback -----------------------------------------
-    def _show_feedback(self) -> None:
-        useful = self.query_one("#flow-feedback-useful", Select)
-        useful.clear()
-        self.query_one("#flow-feedback-note", Input).value = ""
-        feedback = self.query_one("#flow-feedback")
-        feedback.display = True
-
-    def _hide_feedback(self) -> None:
-        feedback = self.query_one("#flow-feedback")
-        feedback.display = False
-
-    def _save_feedback(self) -> None:
-        if not self.request_id or not self.run_id:
-            self._hide_feedback()
-            return
-        useful_value = self.query_one("#flow-feedback-useful", Select).value
-        if useful_value not in {"yes", "no"}:
-            self.app.notify(
-                "Choose whether the map was useful, or choose Skip.",
-                severity="warning",
-            )
-            return
-        note = self.query_one("#flow-feedback-note", Input).value
-        repo.save_map_feedback(
-            self.request_id,
-            self.run_id,
-            useful=useful_value == "yes",
-            note=note,
-        )
-        self._hide_feedback()
-        self.app.notify("Feedback saved locally. Thank you.")
-
-    def _open_chart(self, charts: dict) -> None:
-        """Pop the finished tree chart open (macOS) — the result should be
-        seen, not hunted for in a hidden folder."""
-        if getattr(self.app, "is_headless", False) or sys.platform != "darwin":
-            return
-        chart = charts.get("professional") or next(iter(charts.values()), None)
-        if chart:
-            try:
-                subprocess.Popen(["open", chart])
-            except OSError:
-                pass
