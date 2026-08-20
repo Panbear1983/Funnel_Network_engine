@@ -34,8 +34,19 @@ class CrudPanel(Vertical):
             yield Button(f"Add {self.entity_name}", id="crud-add", variant="primary")
             yield Button("Edit", id="crud-edit")
             yield Button("Delete", id="crud-delete", variant="error")
+            yield from self.extra_buttons()
         yield Static("", id="crud-empty", classes="empty-hint")
         yield DataTable(id="crud-table", zebra_stripes=True)
+
+    def extra_buttons(self) -> ComposeResult:
+        """Hook — subclasses may yield extra toolbar buttons; presses arrive
+        via handle_extra_button. (Never override on_button_pressed with a
+        super() call — that deadlocks the smoke tests' pilot.press in the
+        animator; see the note in panels/graph.py.)"""
+        return iter(())
+
+    def handle_extra_button(self, event) -> None:
+        """Hook — presses of extra_buttons() land here."""
 
     def on_mount(self) -> None:
         table = self.query_one("#crud-table", DataTable)
@@ -81,6 +92,7 @@ class CrudPanel(Vertical):
     # --- actions ---------------------------------------------------------
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id not in ("crud-add", "crud-edit", "crud-delete"):
+            self.handle_extra_button(event)
             return
         event.stop()
         if not self.request_id:

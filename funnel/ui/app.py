@@ -13,11 +13,12 @@ from funnel.db import repo
 from funnel.db.engine import init_db
 from funnel.db.models import ResearchRequest
 from funnel.ui.panels.analysis import AnalysisPanel
-from funnel.ui.panels.evidence import EvidenceDealsPanel
+from funnel.ui.panels.evidence import DealPanel, EvidencePanel
 from funnel.ui.panels.export import ExportPanel
 from funnel.ui.panels.flow import FlowPanel
-from funnel.ui.panels.graph import GraphPanel
+from funnel.ui.panels.graph import CompanyPanel, EdgePanel, ProcessNodePanel
 from funnel.ui.panels.intake import IntakePanel
+from funnel.ui.panels.treeview import TreeViewPanel
 from funnel.ui.manual import ManualScreen
 from funnel.ui.sidebar import Sidebar
 
@@ -28,6 +29,7 @@ class FunnelApp(App):
     BINDINGS = [
         ("ctrl+n", "new_request", "New request"),
         ("ctrl+d", "delete_request", "Delete request"),
+        ("f2", "goto_advanced", "Advanced"),
         ("f1", "show_manual", "Manual"),
         ("ctrl+q", "quit", "Quit"),
     ]
@@ -40,22 +42,30 @@ class FunnelApp(App):
             yield Sidebar(id="sidebar")
             with Vertical(id="main"):
                 yield Static("No request selected.", id="breadcrumb")
+                # Flattened dashboard: Map is the app; everything else lives
+                # in ONE flat Advanced row — never more than two tab levels.
                 with TabbedContent(id="tabs"):
                     with TabPane("Map", id="tab-flow"):
                         yield FlowPanel(id="flow")
-                    with TabPane("Refine (intake)", id="tab-intake"):
-                        yield IntakePanel(id="intake")
-                    with TabPane("Graph & Evidence", id="tab-graph"):
-                        with TabbedContent(id="graph-subtabs"):
-                            with TabPane("Graph", id="subtab-graph"):
-                                yield GraphPanel(id="graph")
-                            with TabPane("Evidence & Deals", id="subtab-evidence"):
-                                yield EvidenceDealsPanel(id="evidence")
-                    with TabPane("Analysis & Export", id="tab-analysis"):
-                        with TabbedContent(id="analysis-subtabs"):
-                            with TabPane("Analysis", id="subtab-analysis"):
+                    with TabPane("Tree", id="tab-tree"):
+                        yield TreeViewPanel(id="treeview")
+                    with TabPane("Advanced", id="tab-advanced"):
+                        with TabbedContent(id="advanced-tabs"):
+                            with TabPane("Refine", id="adv-intake"):
+                                yield IntakePanel(id="intake")
+                            with TabPane("Nodes", id="adv-nodes"):
+                                yield ProcessNodePanel()
+                            with TabPane("Companies", id="adv-companies"):
+                                yield CompanyPanel()
+                            with TabPane("Relations", id="adv-edges"):
+                                yield EdgePanel()
+                            with TabPane("Evidence", id="adv-evidence"):
+                                yield EvidencePanel()
+                            with TabPane("Deals", id="adv-deals"):
+                                yield DealPanel()
+                            with TabPane("Analysis", id="adv-analysis"):
                                 yield AnalysisPanel(id="analysis")
-                            with TabPane("Export", id="subtab-export"):
+                            with TabPane("Export", id="adv-export"):
                                 yield ExportPanel(id="export")
         yield Footer()
 
@@ -91,7 +101,7 @@ class FunnelApp(App):
         breadcrumb = self.query_one("#breadcrumb", Static)
         if not request_id:
             breadcrumb.update(
-                "No request yet — type a topic in the Map tab and press Generate.")
+                "No request yet — type a topic in the Map tab and choose Build Map.")
             return
         req = repo.get(ResearchRequest, request_id)
         if req is None:
@@ -111,6 +121,12 @@ class FunnelApp(App):
 
     def action_delete_request(self) -> None:
         self.query_one(Sidebar).delete_current()
+
+    def action_goto_advanced(self) -> None:
+        """F2 toggles between the Map and the Advanced tab."""
+        tabs = self.query_one("#tabs", TabbedContent)
+        tabs.active = ("tab-advanced" if tabs.active == "tab-flow"
+                       else "tab-flow")
 
     def action_show_manual(self) -> None:
         self.push_screen(ManualScreen())

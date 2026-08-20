@@ -1,6 +1,9 @@
-"""Intake tab: the guided questionnaire. The form is built once; selecting a
-request repopulates the widgets from saved answers. Saving writes IntakeAnswer
-rows and maps the relevant answers back onto the ResearchRequest."""
+"""Advanced intake workspace: the guided questionnaire.
+
+The form is built once; selecting a request repopulates the widgets from saved
+answers. Saving writes IntakeAnswer rows and maps the relevant answers back
+onto the ResearchRequest.
+"""
 
 from __future__ import annotations
 
@@ -56,7 +59,9 @@ class IntakePanel(Vertical):
                     for q in section.questions:
                         yield Label(self._label_for(q), classes="field-label")
                         yield self._widget_for(q)
-        with Horizontal(classes="toolbar"):
+        # Keep the primary action outside the scrollable questionnaire so it
+        # remains reachable even when most optional sections are expanded.
+        with Horizontal(classes="toolbar intake-actions"):
             yield Button("Save intake", id="save-intake", variant="primary")
 
     @staticmethod

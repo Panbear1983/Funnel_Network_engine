@@ -3,21 +3,23 @@ commit + tree charts at all three detail levels.
 
 This is the engine behind the Map tab and the `--topic` CLI. The auto-brief
 replaces the manual questionnaire on the golden path: one LLM call proposes the
-intake answers (kept editable in the Refine tab), plus the topic profile that
-drives smart search. Nothing here bypasses the review gate — research still
-stages Proposals, and `finalize` only materializes non-rejected ones.
+intake answers (kept editable in Advanced → Refine), plus the topic
+profile that drives smart search. Nothing here bypasses the review gate —
+research still stages Proposals, and `finalize` only materializes non-rejected
+ones.
 """
 
 from __future__ import annotations
 
 from typing import Callable, Optional
 
+from funnel import config
 from funnel.db import repo
 from funnel.db.models import ResearchRequest, ResearchRun, VisualizationExport
 from funnel.export import data_export
 from funnel.export.chart_tree import render_tree
 from funnel.graph.assembly import build_graph
-from funnel.intake.questions import SECTIONS
+from funnel.intake.questions import RESEARCH_CONTEXT_ID, SECTIONS
 from funnel.research import enrich
 from funnel.research import llm as llm_factory
 from funnel.research import prompts
@@ -63,8 +65,10 @@ def apply_brief(request_id: str, llm, progress: Optional[Progress] = None) -> To
     flow on a refined request keeps the user's edits."""
     request = repo.get(ResearchRequest, request_id)
     topic = request.title or request.industry_of_interest or ""
-    data = llm(prompts.auto_brief(topic))
     answers = repo.get_intake_answers(request_id)
+    context_answer = answers.get(RESEARCH_CONTEXT_ID)
+    research_context = context_answer.answer_value if context_answer else ""
+    data = llm(prompts.auto_brief(topic, research_context=research_context))
 
     filled = 0
     for qid, (attr, is_list) in _BRIEF_FIELDS.items():
@@ -96,7 +100,17 @@ def run_research(
 ) -> ResearchRun:
     """Auto-brief (1 call) + the staged research pipeline, with smart search."""
     if llm is None:
+        if not config.llm_api_key():
+            return run_pipeline(
+                request_id,
+                tier_key,
+                llm=None,
+                gather=gather,
+                progress=progress,
+                online_fallback=online_fallback,
+            )
         llm = llm_factory.make_llm(resolve_model(get_tier(tier_key)))
+    skipped: list[str] = []
     if progress:
         progress("Understanding the topic…")
     try:
@@ -104,11 +118,12 @@ def run_research(
     except Exception as exc:
         # A failed brief shouldn't kill the run — fall back to what's on the request.
         profile = None
+        skipped.append(f"auto-brief: {type(exc).__name__}: {exc}")
         if progress:
             progress(f"Auto-brief skipped ({type(exc).__name__}) — using existing intake.")
     return run_pipeline(request_id, tier_key, llm=llm, gather=gather,
                         progress=progress, online_fallback=online_fallback,
-                        profile=profile)
+                        profile=profile, initial_skips=skipped)
 
 
 def finalize(request_id: str, run_id: str,
@@ -131,6 +146,14 @@ def finalize(request_id: str, run_id: str,
     counts["enriched"] = sum(
         enrich.enrich_companies(request_id, llm=llm, progress=progress).values())
 
+    exported = export_map(request_id, progress=progress)
+    return {"counts": counts, **exported}
+
+
+def export_map(request_id: str, progress: Optional[Progress] = None) -> dict:
+    """Build the graph and export the tree chart at all three detail levels
+    plus the Markdown report. Shared by the LLM finalize path and the offline
+    ISR-seed path. Returns {'charts': {...}, 'report': str}."""
     model = build_graph(request_id)
     request = model.request
 
@@ -150,4 +173,4 @@ def finalize(request_id: str, run_id: str,
     report = data_export.export_markdown(model, data_export.export_path(request, "md"))
     if progress:
         progress(f"Report → {report.name}")
-    return {"counts": counts, "charts": charts, "report": str(report)}
+    return {"charts": charts, "report": str(report)}

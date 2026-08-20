@@ -103,14 +103,17 @@ def _layout(root: _T) -> tuple[int, int]:
 
 
 def render_tree(model, path: Path, fmt: Optional[str] = None, resolution: str = "professional") -> Path:
-    import matplotlib
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
+    # Object-oriented Figure API (no pyplot global state) so this is safe to
+    # call from background worker threads concurrently (Map build vs Tree export).
+    from matplotlib.backends.backend_agg import FigureCanvasAgg
+    from matplotlib.figure import Figure
 
     root = build_tree(model, resolution)
     leaves, depth = _layout(root)
     leaves = max(leaves, 1)
-    fig, ax = plt.subplots(figsize=(max(8.0, 3.2 * (depth + 1)), max(5.0, 0.34 * leaves)))
+    fig = Figure(figsize=(max(8.0, 3.2 * (depth + 1)), max(5.0, 0.34 * leaves)))
+    FigureCanvasAgg(fig)
+    ax = fig.add_subplot(111)
 
     def draw(node: _T) -> None:
         for ch in node.children:
@@ -139,5 +142,4 @@ def render_tree(model, path: Path, fmt: Optional[str] = None, resolution: str = 
     ax.invert_yaxis()
     ax.axis("off")
     fig.savefig(str(path), format=fmt, bbox_inches="tight", dpi=150)
-    plt.close(fig)
     return path

@@ -21,11 +21,18 @@ def _msg(user: str) -> list[dict]:
     return [{"role": "system", "content": _SYSTEM}, {"role": "user", "content": user}]
 
 
-def auto_brief(topic: str) -> list[dict]:
+def auto_brief(topic: str, research_context: str = "") -> list[dict]:
     """One call that turns a bare topic into the whole research brief (the
     intake questionnaire's key answers) plus a topic profile for smart search."""
+    context = research_context.strip()
+    context_block = (
+        "Optional research context supplied by the user:\n"
+        f"{context}\n\n"
+        if context else ""
+    )
     return _msg(
         f'Topic of interest: "{topic}"\n\n'
+        f"{context_block}"
         "Propose a research brief for mapping this topic's value chain / supplier network.\n"
         "Fill every field with your best judgement; keep lists short and concrete.\n"
         'JSON shape: {"industry":str,"target_output":str,"geography":[str],'
@@ -82,11 +89,17 @@ def search_plan(brief: str, node_names: list[str], max_queries: int,
 
 
 def company_discovery(node_name: str, brief: str, context: str, limit: int,
-                      known: list[str] | None = None) -> list[dict]:
+                      known: list[str] | None = None,
+                      grounded: list[str] | None = None) -> list[dict]:
     anchor = ""
     if known:
         anchor = ("Companies already mapped for this request — reuse their EXACT names "
                   "when you mean the same company:\n" + ", ".join(known) + "\n\n")
+    if grounded:
+        anchor += ("Companies from a private research database that may be active in "
+                   "this node — include only those genuinely relevant, and reuse their "
+                   "EXACT names and tickers:\n"
+                   + "\n".join(f"- {g}" for g in grounded) + "\n\n")
     return _msg(
         f"{brief}\n\nProcess node: {node_name}\n\n{anchor}Source excerpts (OSINT):\n{context}\n\n"
         f"Identify up to {limit} companies active in this node. Prefer names supported by the "
@@ -119,6 +132,34 @@ def relationships(company_lines: str, brief: str) -> list[dict]:
         '],"evidence_level":one of ['
         f"{_EVL}"
         '],"confidence":0..1,"rationale":str}]}'
+    )
+
+
+def isr_relationships(subject_label: str, core_business: str,
+                      clients_text: str, competitors_text: str) -> list[dict]:
+    """Constrained extraction of supplier/customer/competitor edges from ONE
+    company's ISR dossier prose (Traditional Chinese). Extraction only — never
+    world knowledge — with a verbatim quote per edge for a substring guard."""
+    return _msg(
+        f"You are given ONE company's research dossier fields, written in "
+        f"Traditional Chinese. Subject company: {subject_label}.\n"
+        f"CORE BUSINESS: {core_business}\n"
+        f"CLIENTS / ORDERS: {clients_text}\n"
+        f"COMPETITORS: {competitors_text}\n\n"
+        "Extract ONLY companies explicitly named in the CLIENTS or COMPETITORS "
+        "text — do NOT add companies from world knowledge. For each, copy its "
+        "name EXACTLY as written; if a stock ticker appears in parentheses "
+        "beside it, copy that ticker verbatim into counterparty_ticker, else "
+        "null. Classify the relation from the subject's perspective: a CLIENTS "
+        "entity the subject sells to / supplies is a customer "
+        "(direction=subject_to_counterparty, relationship_type=customer); a "
+        "COMPETITORS entity is a competitor. The quote MUST be the exact "
+        "substring the entity was taken from.\n"
+        'JSON shape: {"edges":[{"counterparty_name":str,'
+        '"counterparty_ticker":str|null,"relationship_type":one of ['
+        f"{_REL}"
+        '],"direction":"subject_to_counterparty"|"counterparty_to_subject",'
+        '"source_field":"clients"|"competitors","confidence":0..1,"quote":str}]}'
     )
 
 

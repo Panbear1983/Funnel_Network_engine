@@ -10,6 +10,8 @@ import tempfile
 import traceback
 
 os.environ.setdefault("FUNNEL_HOME", tempfile.mkdtemp(prefix="funnel_smoke_"))
+# Keep the offline test deterministic: never auto-probe a real ISR sibling DB.
+os.environ.setdefault("FUNNEL_ISR_DB", "")
 # Dummy key so the Map tab's preflight enables Generate; the fake llm never uses it.
 # Provider pinned so a repo .env (FUNNEL_LLM_PROVIDER=openrouter) can't flip the preflight.
 os.environ.setdefault("ANTHROPIC_API_KEY", "smoke-test-dummy")
@@ -34,13 +36,19 @@ async def run() -> None:
         await pilot.pause()
         assert app.current_request_id == r1.id, app.current_request_id
 
-        for tab_id in ("tab-flow", "tab-intake", "tab-graph", "tab-analysis"):
+        for tab_id in ("tab-flow", "tab-tree", "tab-advanced"):
             app.query_one("#tabs").active = tab_id
             await pilot.pause()
-        for subtabs, sub_id in (("#graph-subtabs", "subtab-evidence"),
-                                ("#analysis-subtabs", "subtab-export")):
-            app.query_one(subtabs).active = sub_id
+        for adv_id in ("adv-intake", "adv-nodes", "adv-companies", "adv-edges",
+                       "adv-evidence", "adv-deals", "adv-analysis", "adv-export"):
+            app.query_one("#advanced-tabs").active = adv_id
             await pilot.pause()
+
+        # Regression: the dashboard stays flat — max two tab levels anywhere.
+        from textual.widgets import TabbedContent as _TC
+        for tc in app.query(_TC):
+            depth = sum(1 for a in tc.ancestors if isinstance(a, _TC))
+            assert depth <= 1, f"nested tabs too deep: {tc.id} depth={depth}"
 
         # --- Phase 1: intake save + resume ---
         from funnel.ui.panels.intake import IntakePanel
@@ -78,7 +86,6 @@ async def run() -> None:
             CompanyPanel,
             EdgeForm,
             EdgePanel,
-            GraphPanel,
             ProcessNodeForm,
         )
 
@@ -114,10 +121,9 @@ async def run() -> None:
         repo.add(RelationshipEdge(request_id=r1.id, **edge_data))
 
         # Panels render the rows (edge resolves company names)
-        graph = app.query_one(GraphPanel)
-        epanel = graph.query_one(EdgePanel)
+        epanel = app.query_one(EdgePanel)
         epanel.load_request(r1.id)
-        cpanel = graph.query_one(CompanyPanel)
+        cpanel = app.query_one(CompanyPanel)
         cpanel.load_request(r1.id)
         await pilot.pause()
         assert epanel.query_one("#crud-table").row_count == 1
@@ -130,7 +136,6 @@ async def run() -> None:
         from funnel.ui.panels.evidence import (
             DealForm,
             DealPanel,
-            EvidenceDealsPanel,
             EvidenceForm,
             EvidencePanel,
         )
@@ -165,9 +170,8 @@ async def run() -> None:
         await pilot.pause()
         repo.add(Deal(request_id=r1.id, **deal_data))
 
-        evidence_panel = app.query_one(EvidenceDealsPanel)
-        epan = evidence_panel.query_one(EvidencePanel)
-        dpan = evidence_panel.query_one(DealPanel)
+        epan = app.query_one(EvidencePanel)
+        dpan = app.query_one(DealPanel)
         epan.load_request(r1.id)
         dpan.load_request(r1.id)
         await pilot.pause()

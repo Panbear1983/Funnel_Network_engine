@@ -72,28 +72,67 @@ uv run python -m funnel.research.run --topic "Chip manufacturing" --tier profess
 python-dotenv (Phase 6 web automation). Install only `[viz]` if you don't need the
 Research tab.
 
-Exports (charts and data) are written to `~/.funnel_network_engine/exports`.
+The **Tree** tab shows the built map in-app as an interactive tree (layers →
+nodes → companies; `Enter` a company for its dossier, `e` to export). Exports
+(charts and data) are also written to `~/.funnel_network_engine/exports`.
 Data is stored outside the repo at `~/.funnel_network_engine/funnel.db`
 (override with the `FUNNEL_HOME` environment variable).
 
-The Research tab needs API keys in a `.env` file at the repo root (never committed):
+The Research tab needs API keys in a `.env` file at the repo root (never committed).
+This repo uses **NVIDIA** as its LLM provider (get a key at build.nvidia.com):
 
 ```
-ANTHROPIC_API_KEY=sk-ant-...
-TAVILY_API_KEY=tvly-...
-# optional per-tier model overrides:
-ANTHROPIC_MODEL_HIGH=claude-haiku-4-5
-ANTHROPIC_MODEL_PRO=claude-sonnet-4-6
-ANTHROPIC_MODEL_DEEP=claude-opus-4-8
+FUNNEL_LLM_PROVIDER=nvidia
+NVIDIA_API_KEY=nvapi-...
+TAVILY_API_KEY=tvly-...        # recommended: NVIDIA has no built-in web search
+# optional per-tier model overrides (Llama-3.x instruct defaults):
+NVIDIA_MODEL_HIGH=meta/llama-3.1-8b-instruct
+NVIDIA_MODEL_PRO=meta/llama-3.3-70b-instruct
+NVIDIA_MODEL_DEEP=meta/llama-3.1-405b-instruct
 ```
 
-Keys: `Ctrl+N` new request, `Ctrl+D` delete request, `Ctrl+Q` quit.
+Other providers still work: set `FUNNEL_LLM_PROVIDER=anthropic` (+ `ANTHROPIC_API_KEY`)
+for native Claude, or `openrouter` (+ `OPENROUTER_API_KEY`) for e.g. DeepSeek.
+
+Keys: `Ctrl+N` new request, `Ctrl+D` delete request, `F2` Map ⇄ Advanced,
+`Ctrl+Q` quit.
+
+### ISR knowledge base (optional)
+
+When the sibling `Investment_Strategy_Research_2026` repo sits beside this one,
+its research database grounds every run — read-only, never modified. The Map
+status line shows a green `● ISR <n> co.` when it is active. What it adds:
+
+- **Grounding** — company discovery is seeded with known equities, junk
+  screening trusts them, empty tickers/countries/exchanges are auto-filled, and
+  weekly maintenance screenings become dated evidence.
+- **Dossiers** — the 22-field company dossier is one keypress away (`d` on the
+  Map, `i`/Dossier in Advanced → Companies, `Ctrl+F` autofill in the company
+  form), with a staleness cue (green/yellow/red by dossier age).
+- **Seed from ISR (no LLM)** — pick an industry/tier on the Map and press
+  **Seed from ISR** to build a map straight from the curated universe, with
+  dossiers attached and tree charts exported — no API key, no network.
+- **Mine ISR relationships** — from a dossier, extract supplier/customer/
+  competitor edges out of its prose into reviewable edge proposals.
+
+Point `FUNNEL_ISR_DB` at another SQLite path to relocate it, or set it empty
+(`FUNNEL_ISR_DB=`) to disable; without the DB the app behaves exactly as
+before. Standalone lookups:
+
+```bash
+uv run python -m funnel.knowledge.isr --lookup 2330
+uv run python -m funnel.knowledge.isr --candidates "GPU,AI server"
+uv run python -m funnel.knowledge.isr --stats
+```
 
 A headless smoke test covering the whole pipeline:
 
 ```bash
 uv run python tools/smoke.py
 ```
+
+ISR-specific smokes: `tools/smoke_isr.py`, `tools/smoke_isr_grounding.py`,
+`tools/smoke_isr_evidence.py` (all offline, fixture-backed).
 
 ## Repository Status
 
@@ -122,7 +161,7 @@ Implemented (terminal UI):
   a topic profile (aliases, jargon, key products) with URL dedup and alias
   retry, review became click-to-reject (all findings included by default), and
   Build auto-exports the tree chart at all three resolutions. The questionnaire
-  lives on as the optional Refine tab; CRUD deletes confirm; empty tables point
-  back to the Map tab. Headless: `--topic "X" --build`.
+  lives under **Advanced → Refine**; CRUD deletes confirm;
+  empty tables point back to the Map tab. Headless: `--topic "X" --build`.
 
 Planned next per `docs/roadmap.md`: Phase 7 company intelligence, Phases 8–10.

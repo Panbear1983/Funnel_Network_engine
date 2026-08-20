@@ -13,6 +13,7 @@ import argparse
 import sys
 
 from funnel.db import repo
+from funnel.db.models import ResearchRunOutcome
 from funnel.db.engine import init_db
 from funnel.research import flow
 from funnel.research.ingest import commit_proposals
@@ -54,8 +55,11 @@ def main(argv=None) -> int:
 
     if args.dry_run:
         return 0
-    if run.status != "complete" and not run.status.startswith("complete"):
-        # A failed run must not be committed (live run 2 committed a half-run).
+    if run.status not in {
+        ResearchRunOutcome.COMPLETE.value,
+        ResearchRunOutcome.PARTIAL.value,
+    }:
+        # Non-buildable runs must not be committed (live run 2 committed a half-run).
         print(f"NOT COMMITTED — run status is '{run.status}'. Fix and re-run.")
         return 1
     if args.build:

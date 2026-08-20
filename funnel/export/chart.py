@@ -55,9 +55,10 @@ def company_label(c, limit: int = 18) -> str:
 
 
 def render_funnel(model, path: Path, fmt: Optional[str] = None) -> Path:
-    import matplotlib
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
+    # Object-oriented Figure API (no pyplot global state) — thread-safe for
+    # concurrent worker-thread renders.
+    from matplotlib.backends.backend_agg import FigureCanvasAgg
+    from matplotlib.figure import Figure
     from matplotlib.lines import Line2D
 
     node_by_id = model.node_by_id
@@ -81,7 +82,9 @@ def render_funnel(model, path: Path, fmt: Optional[str] = None) -> Path:
     n_layers = len(layers)
     layer_y = {layer: (n_layers - 1 - i) for i, layer in enumerate(layers)}
 
-    fig, ax = plt.subplots(figsize=(14, max(5.0, 1.7 * n_layers)))
+    fig = Figure(figsize=(14, max(5.0, 1.7 * n_layers)))
+    FigureCanvasAgg(fig)
+    ax = fig.add_subplot(111)
 
     # layer bands + process nodes
     for layer in layers:
@@ -147,5 +150,4 @@ def render_funnel(model, path: Path, fmt: Optional[str] = None) -> Path:
     ax.legend(handles=edge_handles, loc="lower right", fontsize=8, title="Edge", framealpha=0.9)
 
     fig.savefig(str(path), format=fmt, bbox_inches="tight", dpi=150)
-    plt.close(fig)
     return path

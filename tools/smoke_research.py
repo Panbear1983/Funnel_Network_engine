@@ -9,6 +9,8 @@ import tempfile
 import traceback
 
 os.environ.setdefault("FUNNEL_HOME", tempfile.mkdtemp(prefix="funnel_research_"))
+# Keep the offline test deterministic: never auto-probe a real ISR sibling DB.
+os.environ.setdefault("FUNNEL_ISR_DB", "")
 
 from funnel.db import repo  # noqa: E402
 from funnel.db.engine import init_db  # noqa: E402

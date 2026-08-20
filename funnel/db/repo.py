@@ -144,3 +144,43 @@ def latest_run(request_id: str) -> Optional[m.ResearchRun]:
             .order_by(m.ResearchRun.started_at)
         ))
         return runs[-1] if runs else None
+
+
+# --- optional local map feedback -----------------------------------------
+
+def save_map_feedback(
+    request_id: str, run_id: str, useful: bool, note: str = ""
+) -> m.MapFeedback:
+    """Create or update local product feedback for a map run.
+
+    One row per run is enough for the novice pilot and keeps repeat saves from
+    creating duplicates. Notes are defensively capped even when this helper is
+    called outside the UI.
+    """
+    clean_note = note.strip()[:500]
+    with new_session() as s:
+        feedback = s.exec(
+            select(m.MapFeedback).where(m.MapFeedback.run_id == run_id)
+        ).first()
+        if feedback is None:
+            feedback = m.MapFeedback(
+                request_id=request_id,
+                run_id=run_id,
+                useful=useful,
+                note=clean_note,
+            )
+        else:
+            feedback.request_id = request_id
+            feedback.useful = useful
+            feedback.note = clean_note
+        s.add(feedback)
+        s.commit()
+        s.refresh(feedback)
+        return feedback
+
+
+def get_map_feedback(run_id: str) -> Optional[m.MapFeedback]:
+    with new_session() as s:
+        return s.exec(
+            select(m.MapFeedback).where(m.MapFeedback.run_id == run_id)
+        ).first()

@@ -1,7 +1,7 @@
 """Export tab (Phase 5): render the funnel chart and export structured data.
 
-Files land in config.EXPORT_DIR (~/.funnel_network_engine/exports). Chart
-exports also record a VisualizationExport row.
+Files land in config.EXPORT_DIR (the repository's exports/ folder by default).
+Chart exports also record a VisualizationExport row.
 """
 
 from __future__ import annotations

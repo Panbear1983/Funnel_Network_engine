@@ -8,8 +8,16 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Callable, Optional
 
+from funnel import config
 from funnel.db import repo
-from funnel.db.models import Proposal, ResearchRequest, ResearchRun
+from funnel.db.models import (
+    Proposal,
+    ResearchRequest,
+    ResearchRun,
+    ResearchRunOutcome,
+)
+from funnel.intake.questions import RESEARCH_CONTEXT_ID
+from funnel.knowledge.isr import IsrCompany, IsrKnowledge
 from funnel.research import llm as llm_factory
 from funnel.research import prompts, screen, smartsearch, websearch
 from funnel.research.ingest import slugify
@@ -36,6 +44,11 @@ def _brief(request: ResearchRequest, answers: dict) -> str:
     ]
     if request.geography:
         parts.append("Geography: " + ", ".join(request.geography))
+    context_answer = answers.get(RESEARCH_CONTEXT_ID)
+    research_context = (
+        context_answer.answer_value.strip() if context_answer else "")
+    if research_context:
+        parts.append(f"Research context: {research_context}")
     parts.append(f"Depth: {request.research_depth}; source strictness: {request.source_strictness}")
     for qid in ("relationship_types", "company_origin", "goal"):
         a = answers.get(qid)
@@ -64,23 +77,65 @@ def run_pipeline(
     dry_run: bool = False,
     online_fallback: bool = True,
     profile: Optional[TopicProfile] = None,
+    initial_skips: Optional[list[str]] = None,
 ) -> ResearchRun:
     tier = get_tier(tier_key)
     model = resolve_model(tier)
-    if llm is None:
-        llm = llm_factory.make_llm(model)
-    injected_gather = gather is not None
-    if gather is None:
-        gather = websearch.gather_context
+    request = repo.get(ResearchRequest, request_id)
+    run = repo.add(ResearchRun(
+        request_id=request_id, tier=tier_key, model=model, status="running"))
     log: list[str] = []
+    skips = list(initial_skips or [])
+    credential_blocked = False
 
     def note(msg: str) -> None:
         log.append(msg)
         if progress:
             progress(msg)
 
-    request = repo.get(ResearchRequest, request_id)
-    run = repo.add(ResearchRun(request_id=request_id, tier=tier_key, model=model, status="running"))
+    def skip(stage: str, exc: Exception) -> None:
+        nonlocal credential_blocked
+        reason = f"{stage}: {type(exc).__name__}: {exc}"
+        if reason not in skips:
+            skips.append(reason)
+            note(f"Skipped {reason}")
+        # Tavily is optional because model-backed online research can replace
+        # it. Only a provider-stage credential failure blocks the run.
+        if stage != "source gathering" and _is_credentials_error(exc):
+            credential_blocked = True
+
+    if llm is None:
+        if not config.llm_api_key():
+            key_name = config.llm_key_name()
+            return _finish(
+                run,
+                ResearchRunOutcome.NEEDS_CREDENTIALS,
+                log,
+                note,
+                skips=[f"research provider: {key_name} is not configured"],
+            )
+        try:
+            llm = llm_factory.make_llm(model)
+        except Exception as exc:
+            skip("research provider", exc)
+            return _finish(
+                run,
+                (ResearchRunOutcome.NEEDS_CREDENTIALS
+                 if credential_blocked else ResearchRunOutcome.FAILED),
+                log,
+                note,
+                skips=skips,
+            )
+    injected_gather = gather is not None
+    if gather is None:
+        gather = websearch.gather_context
+
+    def tracked_gather(query: str, count: int) -> tuple:
+        try:
+            return gather(query, count)
+        except Exception as exc:
+            skip("source gathering", exc)
+            return "", []
 
     def add_proposal(entity_type, ref_key, payload, rationale, confidence, sources,
                      status="pending"):
@@ -97,8 +152,15 @@ def run_pipeline(
         # searches are pinned to the current year.
         older = answers.get("older_sources")
         recent_year = None if (older and older.answer_value == "yes") else datetime.now().year
-        smart = SmartGather(gather, profile, recent_year=recent_year)
+        smart = SmartGather(tracked_gather, profile, recent_year=recent_year)
         note(f"Brief built for '{request.title or request.industry_of_interest or request_id}'.")
+
+        # Optional grounding layer: the sibling ISR knowledge DB (read-only).
+        # None when absent/disabled — every use below no-ops.
+        isr = IsrKnowledge.open_default()
+        if isr is not None:
+            note(f"  ISR knowledge base connected "
+                 f"({isr.stats()['companies']} companies).")
 
         # Re-run anchoring: existing entity names are fed back into the prompts
         # so a second Generate reuses them and the idempotent merge can match.
@@ -113,9 +175,13 @@ def run_pipeline(
                                          existing=existing_node_names))
         nodes = data.get("process_nodes", [])[: tier.max_layers]
         node_refs = []
+        node_keywords: dict[str, list[str]] = {}
         for n in nodes:
             ref = slugify(n.get("name", ""))
+            if not ref:
+                continue
             node_refs.append((ref, n.get("name", "")))
+            node_keywords[ref] = [k for k in n.get("keywords", []) if k]
             add_proposal("process_node", ref, {
                 "name": n.get("name", ""), "layer": n.get("layer", "midstream"),
                 "description": n.get("description", ""), "keywords": n.get("keywords", []),
@@ -124,7 +190,14 @@ def run_pipeline(
         note(f"  {len(node_refs)} process nodes proposed.")
 
         if dry_run:
-            return _finish(run, "complete (dry-run)", log, note)
+            return _finish(
+                run,
+                _successful_outcome(run, skips, credential_blocked),
+                log,
+                note,
+                skips=skips,
+                prefix="dry-run",
+            )
 
         # Stage 2.5 — smart source planning: intent-tagged queries generated
         # from the topic (and its alias/jargon profile), not fixed templates.
@@ -145,16 +218,21 @@ def run_pipeline(
             if text:
                 context_pool.append(text)
             online = online_fallback and not text
+            grounded = None
+            if isr is not None:
+                grounded = [f"{c.label} — {c.country}, {c.industry}"
+                            for c in isr.candidates([name, *node_keywords.get(ref, [])])
+                            ] or None
             try:
                 data = llm(
                     prompts.company_discovery(name, brief, text or "(no scraped text available)",
                                               tier.companies_per_node,
-                                              known=existing_company_names),
+                                              known=existing_company_names,
+                                              grounded=grounded),
                     online=online,
                 )
             except Exception as exc:
-                note(f"  company discovery failed for '{name}' "
-                     f"({type(exc).__name__}) — continuing.")
+                skip(f"company discovery for '{name}'", exc)
                 continue
             comps = data.get("companies", [])[: tier.companies_per_node]
             for c in comps:
@@ -180,9 +258,35 @@ def run_pipeline(
                         "sources": c.get("sources", urls),
                     }
             note(f"  {len(comps)} companies found for '{name}'.")
+
+        # Ground accumulated companies in the ISR knowledge base: fill empty
+        # ticker/country, tag provenance, and shield known-real companies from
+        # the junk screen. Stage 5c reuses these hits for ISR evidence.
+        isr_hits: dict[str, IsrCompany] = {}
+        if isr is not None:
+            for cref, info in companies_acc.items():
+                payload = info["payload"]
+                hit = (isr.lookup(str(payload.get("ticker") or ""),
+                                  country=payload.get("country"))
+                       or isr.lookup(str(payload.get("name") or ""),
+                                     country=payload.get("country")))
+                if hit is None:
+                    continue
+                isr_hits[cref] = hit
+                if not payload.get("ticker") and hit.yahoo_ticker:
+                    payload["ticker"] = hit.yahoo_ticker
+                if not payload.get("country") and hit.country:
+                    payload["country"] = hit.country
+                tag = f"isr:{hit.base_ticker or hit.name}"
+                if tag not in info["sources"]:
+                    info["sources"] = [*info["sources"], tag]
+            if isr_hits:
+                note(f"  {len(isr_hits)} companies grounded in the ISR knowledge base.")
+
         screened = 0
         for cref, info in companies_acc.items():
-            reason = screen.screen_company(info["payload"])
+            reason = screen.screen_company(info["payload"],
+                                           isr_member=cref in isr_hits)
             if reason:
                 # Stage it visibly as rejected (restorable) and keep it out of
                 # the relationship/evidence stages entirely.
@@ -207,7 +311,7 @@ def run_pipeline(
             except Exception as exc:
                 # One flaky LLM response must not kill the run (live run 2
                 # died here on truncated DeepSeek JSON).
-                note(f"  relationship inference failed ({type(exc).__name__}) — continuing.")
+                skip("relationship inference", exc)
                 data = {}
             edges = data.get("edges", [])
             for e in edges:
@@ -263,7 +367,7 @@ def run_pipeline(
                 data = llm(prompts.evidence_and_deals(context, names, tier.extract_deals),
                            online=evidence_online)
             except Exception as exc:
-                note(f"  evidence extraction failed ({type(exc).__name__}) — continuing.")
+                skip("evidence extraction", exc)
                 data = {}
             stage_evidence_items(data)
             for dl in data.get("deals", []):
@@ -309,10 +413,41 @@ def run_pipeline(
                             context2, ", ".join(company_names.values()), False),
                             online=online2)
                     except Exception as exc:
-                        note(f"  evidence hunt failed ({type(exc).__name__}) — continuing.")
+                        skip("targeted evidence hunt", exc)
                         data = {}
                     added = stage_evidence_items(data)
                     note(f"  {added} targeted evidence items proposed.")
+
+        # Stage 5c — ISR maintenance evidence (offline, bounded). Weekly
+        # screenings of ISR-grounded companies become evidence proposals with
+        # dates and source URLs. The ASCII "[ISR <ticker> <week>]" claim
+        # prefix is load-bearing: slugify collapses CJK reasons to nothing, so
+        # the prefix is what keeps ref/merge keys unique and re-runs
+        # idempotent — and it marks provenance in the UI and exports.
+        if isr is not None and isr_hits:
+            isr_evidence = 0
+            for cref, hit in isr_hits.items():
+                if cref not in company_names:
+                    continue  # screened out above
+                for sc in isr.screenings(hit, needs_update_only=True, limit=3):
+                    claim = (f"[ISR {hit.base_ticker or hit.name} "
+                             f"{sc.week_start}] {sc.reason}")
+                    url = sc.source_urls[0] if sc.source_urls else ""
+                    add_proposal("evidence", slugify(claim)[:40] or "ev", {
+                        "source_type": "analyst_reports", "source_url": url,
+                        "publisher": "ISR maintenance screening",
+                        "date": sc.evidence_date or sc.week_start,
+                        "claim": claim, "quote": "",
+                        "related_companies": [cref],
+                        "evidence_strength": "moderate",
+                        "confidence_score": 0.6,
+                    }, "", 0.6, [f"isr:{hit.base_ticker or hit.name}",
+                                 *sc.source_urls])
+                    ev_claims.append(f"- {claim} [{company_names[cref]}] {url}")
+                    ev_pairs.append({cref})
+                    isr_evidence += 1
+            if isr_evidence:
+                note(f"  {isr_evidence} ISR evidence items proposed.")
 
         # Stage 6 — contradiction pass (deep tier): one bounded call checks the
         # claimed edges against the collected evidence; contradicted edges are
@@ -324,7 +459,8 @@ def run_pipeline(
                 for f, t, level in staged_edges)
             try:
                 data = llm(prompts.contradictions(edges_block, "\n".join(ev_claims)))
-            except Exception:
+            except Exception as exc:
+                skip("contradiction check", exc)
                 data = {}
             flagged = 0
             for item in data.get("contradictions", []):
@@ -341,25 +477,90 @@ def run_pipeline(
                         break
             note(f"  {flagged} edges downgraded." if flagged else "  none found.")
 
-        return _finish(run, "complete", log, note)
+        return _finish(
+            run,
+            _successful_outcome(run, skips, credential_blocked),
+            log,
+            note,
+            skips=skips,
+        )
     except Exception as exc:
-        run.status = "failed"
-        run.summary = f"{type(exc).__name__}: {exc}"
-        run.log = log
-        run.finished_at = datetime.now()
-        return repo.update(run)
+        skip("research pipeline", exc)
+        proposals = repo.list_proposals(run.request_id, run_id=run.id)
+        if credential_blocked:
+            outcome = ResearchRunOutcome.NEEDS_CREDENTIALS
+        elif any(p.entity_type == "process_node" for p in proposals):
+            outcome = ResearchRunOutcome.PARTIAL
+        else:
+            outcome = ResearchRunOutcome.FAILED
+        return _finish(run, outcome, log, note, skips=skips)
 
 
-def _finish(run: ResearchRun, status: str, log: list, note: Progress) -> ResearchRun:
+def _is_credentials_error(exc: Exception) -> bool:
+    """Recognize provider credential failures without coupling to one SDK."""
+    current: BaseException | None = exc
+    while current is not None:
+        text = str(current).casefold()
+        if (
+            "api_key" in text
+            and any(word in text for word in ("not set", "missing", "not configured"))
+        ) or "credential" in text:
+            return True
+        current = current.__cause__ or current.__context__
+    return False
+
+
+def _successful_outcome(
+    run: ResearchRun,
+    skips: list[str],
+    credential_blocked: bool,
+) -> ResearchRunOutcome:
+    proposals = repo.list_proposals(run.request_id, run_id=run.id)
+    if credential_blocked:
+        return ResearchRunOutcome.NEEDS_CREDENTIALS
+    if not any(p.entity_type == "process_node" for p in proposals):
+        return ResearchRunOutcome.NO_CREDIBLE_RESULTS
+    if skips:
+        return ResearchRunOutcome.PARTIAL
+    return ResearchRunOutcome.COMPLETE
+
+
+def _finish(
+    run: ResearchRun,
+    outcome: ResearchRunOutcome,
+    log: list,
+    note: Progress,
+    *,
+    skips: Optional[list[str]] = None,
+    prefix: str = "",
+) -> ResearchRun:
     proposals = repo.list_proposals(run.request_id, run_id=run.id)
     counts: dict[str, int] = {}
     for p in proposals:
         counts[p.entity_type] = counts.get(p.entity_type, 0) + 1
-    run.status = "complete"
+    count_text = ", ".join(f"{k} {v}" for k, v in counts.items())
+    skipped = list(skips or [])
+    if outcome == ResearchRunOutcome.COMPLETE:
+        detail = count_text or "nothing proposed"
+    elif outcome == ResearchRunOutcome.PARTIAL:
+        detail = (count_text or "partial proposals saved")
+        if skipped:
+            detail += ". Skipped: " + "; ".join(skipped)
+    elif outcome == ResearchRunOutcome.NEEDS_CREDENTIALS:
+        detail = "Request saved"
+        if skipped:
+            detail += ". Unavailable: " + "; ".join(skipped)
+    elif outcome == ResearchRunOutcome.NO_CREDIBLE_RESULTS:
+        detail = "No usable process nodes were proposed; request saved for refinement"
+    else:
+        detail = "No usable partial map was produced"
+        if skipped:
+            detail += ". Error: " + "; ".join(skipped)
+    run.status = outcome.value
     run.counts = counts
-    run.summary = f"{status}: " + (", ".join(f"{k} {v}" for k, v in counts.items()) or "nothing proposed")
+    label = outcome.value.replace("_", " ")
+    run.summary = f"{label}: " + (f"{prefix}; " if prefix else "") + detail
+    note(run.summary)
     run.log = log
     run.finished_at = datetime.now()
-    saved = repo.update(run)
-    note(run.summary)
-    return saved
+    return repo.update(run)

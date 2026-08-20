@@ -41,9 +41,12 @@ _JUNK_PATTERNS = [
 _MAX_NAME_LEN = 70
 
 
-def screen_company(payload: dict) -> Optional[str]:
+def screen_company(payload: dict, *, isr_member: bool = False) -> Optional[str]:
     """Return a rejection reason when the proposed company is plainly not a
-    company; None when it should stand for human review."""
+    company; None when it should stand for human review. Companies matched in
+    the ISR knowledge base are tracked real equities — never junk."""
+    if isr_member:
+        return None
     name = str(payload.get("name") or "").strip()
     if not name:
         return "empty name"

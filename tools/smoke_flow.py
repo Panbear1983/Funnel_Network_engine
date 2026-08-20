@@ -1,6 +1,6 @@
 """Offline test for the one-topic flow + smart search (no network, no keys).
-Covers: auto-brief → intake answers/request fields, intent-phrased queries,
-alias retry on thin nodes, URL dedup, finalize → 3 tree charts + report.
+Covers: optional context → both briefs, auto-brief → intake/request fields,
+intent-phrased queries, alias retry, URL dedup, finalize → charts + report.
 Run: `python tools/smoke_flow.py`."""
 
 from __future__ import annotations
@@ -11,6 +11,8 @@ import tempfile
 import traceback
 
 os.environ.setdefault("FUNNEL_HOME", tempfile.mkdtemp(prefix="funnel_flow_"))
+# Keep the offline test deterministic: never auto-probe a real ISR sibling DB.
+os.environ.setdefault("FUNNEL_ISR_DB", "")
 # Pin the provider so a repo .env (e.g. FUNNEL_LLM_PROVIDER=openrouter) can't
 # change what this offline test asserts.
 os.environ["FUNNEL_LLM_PROVIDER"] = "anthropic"
@@ -20,7 +22,11 @@ from funnel.db.engine import init_db  # noqa: E402
 from funnel.db.models import (  # noqa: E402
     CompanyNode, ProcessNode, ResearchRequest, VisualizationExport,
 )
+from funnel.intake.questions import (  # noqa: E402
+    RESEARCH_CONTEXT_ID, RESEARCH_CONTEXT_SECTION, RESEARCH_CONTEXT_TEXT,
+)
 from funnel.research import flow  # noqa: E402
+from funnel.research import pipeline, prompts  # noqa: E402
 from funnel.research.smartsearch import INTENT_SUFFIX, PlannedQuery, SmartGather  # noqa: E402
 
 SEEN_QUERIES: list[str] = []
@@ -103,6 +109,37 @@ def fake_gather(query, k):
 
 def run() -> None:
     init_db()
+
+    # --- optional Map context: persistence + both brief paths ------------
+    context_text = "Focus on bottleneck suppliers suitable for a patient investor."
+    context_id = repo.create_request("Precision bearings").id
+    repo.save_intake_answer(
+        context_id, RESEARCH_CONTEXT_SECTION, RESEARCH_CONTEXT_ID,
+        RESEARCH_CONTEXT_TEXT, context_text)
+    auto_prompt: list[str] = []
+
+    def context_llm(messages, *, online=False):
+        auto_prompt.append(messages[-1]["content"])
+        return {}
+
+    flow.apply_brief(context_id, context_llm)
+    assert context_text in auto_prompt[0], auto_prompt[0]
+    context_request = repo.get(ResearchRequest, context_id)
+    research_brief = pipeline._brief(
+        context_request, repo.get_intake_answers(context_id))
+    assert f"Research context: {context_text}" in research_brief, research_brief
+
+    topic_only_id = repo.create_request("Precision bearings topic only").id
+    topic_only_request = repo.get(ResearchRequest, topic_only_id)
+    repo.save_intake_answer(
+        topic_only_id, RESEARCH_CONTEXT_SECTION, RESEARCH_CONTEXT_ID,
+        RESEARCH_CONTEXT_TEXT, "   ")
+    topic_only_brief = pipeline._brief(
+        topic_only_request, repo.get_intake_answers(topic_only_id))
+    topic_only_prompt = prompts.auto_brief(topic_only_request.title)[-1]["content"]
+    assert "Research context:" not in topic_only_brief, topic_only_brief
+    assert "Optional research context" not in topic_only_prompt, topic_only_prompt
+    print("CONTEXT_OK optional note reaches auto-brief + research brief; topic-only unchanged")
 
     # --- unit: SmartGather mechanics -------------------------------------
     sg = SmartGather(lambda q, k: ("txt", ["http://a", "http://b"]))
@@ -200,10 +237,11 @@ def run() -> None:
 
     run_f = flow.run_research(rid3, "professional", llm=flaky_llm,
                               gather=fake_gather, online_fallback=False)
-    assert run_f.status == "complete", run_f.summary
+    assert run_f.status == "partial", run_f.summary
+    assert "relationship inference" in run_f.summary, run_f.summary
     assert not [p for p in repo.list_proposals(rid3, run_id=run_f.id)
                 if p.entity_type == "edge"]
-    print("RESILIENCE_OK relationships failure degraded to 0 edges, run completed")
+    print("RESILIENCE_OK relationships failure preserved proposals as an explicit partial run")
 
     # --- enrichment: fake fundamentals + fake estimates --------------------
     from funnel.research import enrich as enrich_mod
@@ -229,7 +267,7 @@ def run() -> None:
     assert lm2.financials.get("market_cap") == 5e9, lm2.financials
     assert lm2.revenue_purity_estimate == 0.9 and lm2.market_share_estimate == 0.4
     assert ims2.revenue_purity_estimate == 0.55, ims2.revenue_purity_estimate
-    assert counts_e == {"financials": 1, "estimates": 1}, counts_e
+    assert counts_e == {"isr": 0, "financials": 1, "estimates": 1}, counts_e
     print("ENRICH_OK fundamentals + estimates landed; manual value preserved")
 
     # --- source trust: domain tiers + recency decay ------------------------

@@ -47,12 +47,15 @@ uv venv && uv pip install -e ".[viz,research]"
 Create a `.env` file at the repo root (never committed):
 
 ```
-ANTHROPIC_API_KEY=sk-ant-...   # required for automated research
-TAVILY_API_KEY=tvly-...        # required for web search/scraping
+FUNNEL_LLM_PROVIDER=nvidia
+NVIDIA_API_KEY=nvapi-...        # required for automated research (build.nvidia.com)
+TAVILY_API_KEY=tvly-...        # recommended for web search/scraping
 ```
 
-If Tavily scraping returns nothing, the pipeline automatically falls back to
-Claude's built-in web-search tool, so an `ANTHROPIC_API_KEY` alone still works.
+NVIDIA has no built-in web search, so **TAVILY_API_KEY is recommended** — it is
+the source of scraped context. Without it the model answers from its own
+training knowledge only. (The Anthropic and OpenRouter providers do have a
+web-search fallback; see the provider note below.)
 
 ### Launch
 
@@ -70,34 +73,47 @@ The screen has three regions:
   and **Manual** buttons. Selecting a request loads it into every tab.
 - **Breadcrumb (top of main area)** — the active request's title, industry, and
   target output.
-- **Tabs (main area)** — four top-level tabs:
+- **Workspaces (main area)** — three top-level tabs. **Map** opens first;
+  **Tree** shows the built map; all manual/inspection tools live in one flat
+  row under **Advanced** (F2 jumps between Map and Advanced):
 
-| Tab | Contains | Purpose |
+| Workspace | Contains | Purpose |
 |---|---|---|
-| **Map** | Topic bar + Generate/Build + proposal review | The golden path: topic in, tree charts out |
-| **Refine (intake)** | Questionnaire | Optional: adjust the auto-generated brief |
-| **Graph & Evidence** | Graph sub-tab, Evidence & Deals sub-tab | Manually browse and edit nodes, companies, edges, evidence, deals |
-| **Analysis & Export** | Analysis sub-tab, Export sub-tab | Scored summaries, graph queries, extra chart and data formats |
+| **Map** | Topic, optional context, Build Map, ISR seed, and optional proposal review | The primary path: topic in, map out |
+| **Tree** | The value-chain map as an interactive tree | View the result in-app: layers → nodes → companies, `Enter` a company for its dossier, `e` to export charts |
+| **Advanced** | Refine, Nodes, Companies, Relations, Evidence, Deals, Analysis, Export | Optional manual editing, inspection, analysis, and additional exports |
 
 ---
 
 ## 4. The Map Flow (golden path)
 
-### Step 1 — Type a topic and press Enter
+### Step 1 — Type a topic and choose Build Map
 
 Open the **Map** tab (the default), type your topic — e.g. *"Chip
-manufacturing"* — pick a depth, and hit Enter. There is no separate "create
+manufacturing"* — optionally add context, pick a depth, and choose **Build
+Map**.
+
+> **Seed from ISR (no LLM).** When the ISR knowledge base is present (the Map
+> shows `● ISR <n> co.`), you can skip the LLM entirely: pick an **industry**
+> and/or **tier** in the *ISR seed* row and press **Seed from ISR** to build a
+> map straight from the curated, already-researched universe — companies
+> grouped into tier nodes, dossiers attached, tree charts exported, no API key
+> or network needed. Run the normal Build Map (or **Mine ISR relationships**
+> from a dossier) afterwards to enrich it.
+
+There is no separate "create
 request" step: the topic bar creates and selects the request for you. With
 **auto-build** on (the default), that's the entire input: research runs,
 obvious junk is auto-rejected, everything else commits, and the tree charts
 export and open by themselves. Re-running the same topic merges — nothing
 duplicates. Flip auto-build off to review proposals before they commit.
 
-Generate runs everything automatically, with live progress in the log:
+Build Map runs everything automatically, with live progress in the log:
 
 1. **Auto-brief** — one Claude call turns your topic into the full research
    brief (industry, target output, geography, relationship types, key terms).
-   The answers land in the **Refine** tab, where you can edit them later.
+   The answers land in **Advanced → Refine**, where you can
+   edit them later.
 2. **Process stack** — the value chain is decomposed into layered nodes.
 3. **Smart search** (section 7) — topic-aware, intent-tagged web queries per node.
 4. **Company discovery, relationships, evidence** — staged as proposals.
@@ -122,45 +138,55 @@ Done.
 
 ---
 
-## 5. Refining and Manual Editing
+## 5. Advanced Editing
 
-- **Refine (intake)** — the questionnaire the auto-brief filled in. Only the two
+Open **Advanced** (F2) for one flat row of optional workspaces:
+
+- **Refine** — the questionnaire the auto-brief filled in. Only the two
   fields marked `*` (industry, target output) drive research; everything else
   sharpens it. Questions marked *(not used yet)* are stored for future phases.
   Unsaved edits are kept if something else refreshes the app, and you are warned
   if switching requests would discard them.
-- **Graph & Evidence** — hand-edit anything the automation got wrong:
-  add/edit/delete process nodes, companies, relationships, evidence, deals.
-  Deletes ask for confirmation.
-- **Analysis & Export** — scored summaries, canned graph queries, and extra
+- **Nodes / Companies / Relations / Evidence / Deals** — hand-edit anything the
+  automation got wrong; deletes ask for confirmation. In **Companies**, the
+  **Dossier** button (or **i**) opens the ISR research dossier for the selected
+  row, and **Ctrl+F** inside the company form autofills ticker/exchange/country
+  from the ISR knowledge base (when the sibling ISR repo is present).
+- **Analysis / Export** — scored summaries, canned graph queries, and extra
   export formats (funnel chart, single-resolution tree, SVG/PDF, JSON/CSV).
 
 ---
 
 ## 6. Research Tiers and Models
 
-Each tier controls research depth and which Claude model runs the pipeline
-(the Build step always exports the tree chart at **all three** resolutions):
+Each tier controls research depth and which model runs the pipeline (the Build
+step always exports the tree chart at **all three** resolutions). This repo
+uses **NVIDIA** as its provider; defaults are Llama-3.x instruct models:
 
-| Tier | Model (default) | Layers | Companies/node | Evidence | Deals |
+| Tier | Model (NVIDIA default) | Layers | Companies/node | Evidence | Deals |
 |---|---|---|---|---|---|
-| High-level | `claude-haiku-4-5` | 4 | 3 | — | — |
-| Professional | `claude-sonnet-4-6` | 6 | 6 | ✓ | — |
-| Deep Research | `claude-opus-4-8` | 9 | 8 | ✓ | ✓ |
+| High-level | `meta/llama-3.1-8b-instruct` | 4 | 3 | — | — |
+| Professional | `meta/llama-3.3-70b-instruct` | 6 | 6 | ✓ | — |
+| Deep Research | `meta/llama-3.1-405b-instruct` | 9 | 8 | ✓ | ✓ |
 
-Override models in `.env` with `ANTHROPIC_MODEL_HIGH`, `ANTHROPIC_MODEL_PRO`,
-`ANTHROPIC_MODEL_DEEP`, or set `ANTHROPIC_MODEL` to force one model everywhere.
+Override models in `.env` with `NVIDIA_MODEL_HIGH`, `NVIDIA_MODEL_PRO`,
+`NVIDIA_MODEL_DEEP`, or set `NVIDIA_MODEL` to force one model everywhere. Any
+model on build.nvidia.com works; reasoning models (nemotron/deepseek-r1) are
+supported (their `<think>` traces are stripped before JSON parsing).
 
-### Alternative provider: OpenRouter (e.g. DeepSeek)
+### Other providers
 
-Set `FUNNEL_LLM_PROVIDER=openrouter` and `OPENROUTER_API_KEY=...` in `.env` to
-run research through OpenRouter instead of the native Anthropic API. Every tier
-then defaults to `deepseek/deepseek-chat` (roughly 100× cheaper than Claude
-Sonnet); override with `OPENROUTER_MODEL` or per-tier
-`OPENROUTER_MODEL_HIGH/_PRO/_DEEP`. The thin-scrape fallback becomes the
-model's `:online` web plugin (OpenRouter charges a small per-result fee for
-it — a working `TAVILY_API_KEY` keeps that at zero). Switch back by setting
-the provider to `anthropic`.
+- **Anthropic (native Claude)** — `FUNNEL_LLM_PROVIDER=anthropic` +
+  `ANTHROPIC_API_KEY`; tier defaults `claude-haiku-4-5` / `claude-sonnet-4-6` /
+  `claude-opus-4-8`, overridable via `ANTHROPIC_MODEL_HIGH/_PRO/_DEEP`. Thin
+  scrapes fall back to Claude's built-in web search.
+- **OpenRouter (e.g. DeepSeek)** — `FUNNEL_LLM_PROVIDER=openrouter` +
+  `OPENROUTER_API_KEY`; every tier defaults to `deepseek/deepseek-chat`,
+  overridable via `OPENROUTER_MODEL` or `OPENROUTER_MODEL_HIGH/_PRO/_DEEP`.
+  Fallback is the model's `:online` web plugin.
+
+NVIDIA itself has no web-search fallback, so keep `TAVILY_API_KEY` set for
+scraped context.
 
 ---
 
@@ -210,6 +236,12 @@ Further quality passes, all bounded and deterministic in count:
 | `Click` / `Enter` (proposal row) | Toggle reject |
 | `v` | Proposal details |
 | `a` | Restore all rejected proposals |
+| `d` (Map) | ISR dossier of the headline company |
+| `Enter` (Tree tab) | ISR dossier of the selected company |
+| `e` (Tree tab) | Export charts (PNG/PDF/report) |
+| `i` (Advanced → Companies) | ISR dossier of the selected company |
+| `Ctrl+F` (company form) | Autofill ticker/exchange/country from ISR |
+| `F2` | Toggle Map ⇄ Advanced |
 | `Ctrl+N` | New research request |
 | `Ctrl+D` | Delete selected request |
 | `F1` | Open this manual |
@@ -226,6 +258,7 @@ Further quality passes, all bounded and deterministic in count:
 | Exports | `~/.funnel_network_engine/exports/` |
 | Home override | `FUNNEL_HOME` environment variable |
 | Secrets | `.env` at the repo root (read at startup, never logged) |
+| ISR knowledge DB | sibling `Investment_Strategy_Research_2026` repo (read-only, auto-detected); override with `FUNNEL_ISR_DB`, disable with `FUNNEL_ISR_DB=` |
 
 Headless research (no TUI):
 
@@ -242,7 +275,8 @@ python -m funnel.research.run --list   # list request ids
 
 ## 10. Troubleshooting
 
-**"ANTHROPIC_API_KEY is not set"** — add the key to `.env` at the repo root, or
+**"NVIDIA_API_KEY is not set"** (or `ANTHROPIC_API_KEY`/`OPENROUTER_API_KEY` for
+those providers) — add the active provider's key to `.env` at the repo root, or
 export it in your shell before launching.
 
 **Research runs but finds no companies** — check `TAVILY_API_KEY`; without it

@@ -6,12 +6,17 @@ from __future__ import annotations
 from typing import Optional
 
 from textual.app import ComposeResult
+from textual.binding import Binding
 from textual.containers import Vertical
-from textual.widgets import Input, Label, Select, SelectionList, TabbedContent, TabPane
+from textual.widgets import (
+    Button, Input, Label, Select, SelectionList, Static, TabbedContent, TabPane,
+)
 from textual.widgets.selection_list import Selection
 
 from funnel.db import repo
 from funnel.db.models import CompanyNode, EvidenceItem, ProcessNode, RelationshipEdge
+from funnel.knowledge.isr import exchange_label, get_isr
+from funnel.ui.panels.dossier import DossierScreen, resolve_dossier
 from funnel.ui.crud import CrudPanel
 from funnel.ui.evidence_meta import strongest_source
 from funnel.ui.fieldutils import (
@@ -81,6 +86,7 @@ class ProcessNodeForm(FormScreen):
 
 class CompanyForm(FormScreen):
     title_text = "Company"
+    BINDINGS = [Binding("ctrl+f", "isr_fill", "Autofill from ISR")]
     ROLES = [
         ("Operator / producer", "operator"), ("Supplier", "supplier"),
         ("Materials supplier", "materials_supplier"), ("Equipment supplier", "equipment_supplier"),
@@ -104,6 +110,10 @@ class CompanyForm(FormScreen):
         yield Input(value=(e.exchange or "" if e else ""), id="f-exchange")
         yield Label("Country", classes="field-label")
         yield Input(value=(e.country or "" if e else ""), id="f-country")
+        if get_isr() is not None:
+            yield Static("Ctrl+F fills ticker/exchange/country from the ISR "
+                         "knowledge base (type a name or ticker first).",
+                         id="f-isr-status", classes="field-label")
         yield Label("Role", classes="field-label")
         yield build_select(self.ROLES, e.role if e else None, id="f-role",
                            allow_blank=False, default="operator")
@@ -123,6 +133,42 @@ class CompanyForm(FormScreen):
         yield Input(value=(e.customer_concentration or "" if e else ""), id="f-concentration")
         yield Label("Confidence (0–1)", classes="field-label")
         yield Input(value=(str(e.confidence_score) if e else ""), id="f-conf")
+
+    # NOTE: never override an inherited Textual message handler here (e.g.
+    # on_button_pressed with a super() call) — doing so on these screens
+    # leaves the button-press animation pending and any later
+    # pilot.press(...) in the smoke tests deadlocks in
+    # animator.wait_until_complete. Bindings / new handlers only.
+    def action_isr_fill(self) -> None:
+        self._isr_fill()
+
+    def _isr_fill(self) -> None:
+        """Look the typed name/ticker up in the ISR knowledge base and fill
+        only the still-empty identity fields."""
+        isr = get_isr()
+        if isr is None:
+            self.app.notify("ISR knowledge base unavailable.",
+                            severity="warning")
+            return
+        query = self._input_value("#f-ticker") or self._input_value("#f-name")
+        status = self.query_one("#f-isr-status", Static)
+        if not query:
+            status.update("Type a name or ticker first.")
+            return
+        hit = isr.lookup(query, country=self._input_value("#f-country") or None)
+        if hit is None:
+            status.update(f"No ISR match for '{query}'.")
+            return
+        for selector, value in (("#f-name", hit.name),
+                                ("#f-ticker", hit.yahoo_ticker),
+                                ("#f-exchange", exchange_label(hit.ticker)
+                                 or exchange_label(hit.yahoo_ticker)),
+                                ("#f-country", hit.country)):
+            widget = self.query_one(selector, Input)
+            if value and not widget.value.strip():
+                widget.value = value
+        status.update(f"ISR: {hit.label} · {hit.country} · {hit.industry} · "
+                      f"dossier {hit.dossier_updated_at or '—'}")
 
     def collect(self) -> Optional[dict]:
         name = self._input_value("#f-name")
@@ -229,6 +275,28 @@ class CompanyPanel(CrudPanel):
     form_cls = CompanyForm
     columns = ("Name", "Ticker", "Role", "Country", "Conf", "Nodes", "Evidence")
     entity_name = "company"
+    BINDINGS = [Binding("i", "show_dossier", "Dossier")]
+
+    def extra_buttons(self) -> ComposeResult:
+        yield Button("Dossier", id="company-dossier")
+
+    def handle_extra_button(self, event: Button.Pressed) -> None:
+        if event.button.id == "company-dossier":
+            event.stop()
+            self.action_show_dossier()
+
+    def action_show_dossier(self) -> None:
+        eid = self.selected_id()
+        if eid is None:
+            self.app.notify("Select a company row first.", severity="warning")
+            return
+        company = repo.get(CompanyNode, eid)
+        bundle = resolve_dossier(company) if company else None
+        if bundle is None:
+            self.app.notify("No ISR dossier for this company.",
+                            severity="information")
+            return
+        self.app.push_screen(DossierScreen(company, bundle))
 
     def fetch(self) -> list:
         self._evidence_by_company: dict[str, list] = {}

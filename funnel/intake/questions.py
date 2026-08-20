@@ -11,6 +11,11 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 
+RESEARCH_CONTEXT_ID = "research_context"
+RESEARCH_CONTEXT_TEXT = "What do you want to understand or invest around? (optional)"
+RESEARCH_CONTEXT_SECTION = "1. Scope"
+
+
 @dataclass
 class Question:
     id: str
@@ -33,6 +38,7 @@ SECTIONS: list[Section] = [
         [
             Question("industry", "What industry, market, or sector do you want to research?",
                      "text", maps_to="industry_of_interest"),
+            Question(RESEARCH_CONTEXT_ID, RESEARCH_CONTEXT_TEXT, "longtext"),
             Question("target_output", "What final product, service, technology, or value chain should the map explain?",
                      "text", maps_to="target_output"),
             Question("geography", "Which geographies should the research prioritize? (comma-separated)",

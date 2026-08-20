@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from enum import Enum
 from typing import Optional
 
 from sqlalchemy import JSON
@@ -133,17 +134,43 @@ class VisualizationExport(SQLModel, table=True):
 
 # --- Phase 6 web-research staging -----------------------------------------
 
+class ResearchRunOutcome(str, Enum):
+    """Explicit terminal outcomes stored in ``ResearchRun.status``."""
+
+    COMPLETE = "complete"
+    PARTIAL = "partial"
+    NEEDS_CREDENTIALS = "needs_credentials"
+    NO_CREDIBLE_RESULTS = "no_credible_results"
+    FAILED = "failed"
+
+
 class ResearchRun(SQLModel, table=True):
     id: str = Field(default_factory=lambda: _new_id("run"), primary_key=True)
     request_id: str = Field(index=True)
     tier: str = "professional"
     model: str = ""
-    status: str = "running"  # running | complete | failed
+    status: str = "running"  # running, then one of ResearchRunOutcome
     started_at: datetime = Field(default_factory=datetime.now)
     finished_at: Optional[datetime] = None
     summary: str = ""
     log: list = Field(default_factory=list, sa_type=JSON)
     counts: dict = Field(default_factory=dict, sa_type=JSON)
+
+
+class MapFeedback(SQLModel, table=True):
+    """Optional local pilot feedback for one successfully built map.
+
+    This is product feedback, not research evidence. Keeping it in a separate
+    table prevents notes about the UI/result from entering claim provenance or
+    exported evidence.
+    """
+
+    id: str = Field(default_factory=lambda: _new_id("feedback"), primary_key=True)
+    request_id: str = Field(index=True)
+    run_id: str = Field(index=True)
+    useful: bool
+    note: str = ""
+    created_at: datetime = Field(default_factory=datetime.now)
 
 
 class Proposal(SQLModel, table=True):
@@ -173,5 +200,6 @@ CHILD_MODELS = (
     Deal,
     VisualizationExport,
     ResearchRun,
+    MapFeedback,
     Proposal,
 )
